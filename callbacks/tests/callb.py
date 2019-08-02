@@ -3,14 +3,14 @@ import unittest
 import numpy as np
 import torch
 
-from callbacks.classes import CallbackHandler
+from train.pipeline import Pipeline
 from callbacks.metrics import AverageMetric, mean_squared_error
 
 
 class MyTestCase(unittest.TestCase):
     def test_cb(self):
         avg = AverageMetric(mean_squared_error)
-        c = CallbackHandler([avg])
+        c = Pipeline([avg])
         c.on_epoch_begin()
         for batch in range(10000):
             t1 = torch.Tensor([np.random.uniform(0, 1)])

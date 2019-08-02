@@ -4,7 +4,7 @@ import numpy as np
 from PIL import Image
 from matplotlib import pyplot as plt
 
-from dsiac.config import DSIAC_DATA_DIR
+from config import DSIAC_DATA_DIR
 
 
 class ARF:

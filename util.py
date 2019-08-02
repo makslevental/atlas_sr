@@ -5,7 +5,7 @@ from typing import NamedTuple, Any
 import numpy as np
 from torch import Tensor
 
-from dsiac.config import YUMA_DATA_DIR, DSIAC_DATA_DIR
+from config import YUMA_DATA_DIR, DSIAC_DATA_DIR
 
 old_filter = filter
 filter = lambda x, y: list(old_filter(x, y))
@@ -113,3 +113,5 @@ def first_el(x: Any) -> Any:
     if is_listy(x): return first_el(x[0])
     if is_dict(x):  return first_el(x[list(x.keys())[0]])
     return x
+
+
