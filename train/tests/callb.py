@@ -4,7 +4,7 @@ import numpy as np
 import torch
 
 from train.pipeline import Pipeline
-from callbacks.metrics import AverageMetric, mean_squared_error
+from train.metrics import AverageMetric, mean_squared_error
 
 
 class MyTestCase(unittest.TestCase):
