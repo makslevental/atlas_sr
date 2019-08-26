@@ -3,8 +3,8 @@ import unittest
 import numpy as np
 import torch
 
-from train.pipeline import Pipeline
 from train.metrics import AverageMetric, mean_squared_error
+from train.pipeline import Pipeline
 
 
 class MyTestCase(unittest.TestCase):

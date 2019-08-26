@@ -1,6 +1,6 @@
 import unittest
 
-from dsiac.util import *
+from util import *
 
 
 class TestMethods(unittest.TestCase):

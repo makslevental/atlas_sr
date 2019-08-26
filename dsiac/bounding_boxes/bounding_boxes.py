@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from matplotlib import patches as patches
 
 from dsiac.cegr.agt import AGT
-from dsiac.util import basename
+from util import basename
 
 
 @dataclass
@@ -29,12 +29,12 @@ class BoundingBoxes:
     def mine(self, n):
         bboxes = []
         for i, tgt in enumerate(
-            self.agt.agt_dict["Agt"]["TgtSect"][f"TgtUpd.{n}"]["Targets"]
+                self.agt.agt_dict["Agt"]["TgtSect"][f"TgtUpd.{n}"]["Targets"]
         ):
             tgtx, tgty = map(int, tgt["PixLoc"].split())
             upper_left_x, upper_left_y = self.agt.bbox_met_df[
                 self.agt.bbox_met_df["frame"] == n + 1
-            ][["upperx", "uppery"]].iloc[i]
+                ][["upperx", "uppery"]].iloc[i]
             bboxes.append(BoundingBox(upper_left_x, upper_left_y, tgtx, tgty))
         return bboxes
 
