@@ -1,7 +1,6 @@
 from typing import Dict
 
-from dsiac.bounding_boxes.bounding_boxes import BoundingBoxes
-from dsiac.cegr.agt import AGT
+from dsiac.cegr.agt import AGT, BoundingBoxes
 from dsiac.cegr.arf import ARF
 
 

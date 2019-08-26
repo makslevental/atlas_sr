@@ -1,14 +1,18 @@
+import gc
 import os
 import re
 from collections import OrderedDict
+from itertools import zip_longest
 from pathlib import Path
-from typing import NamedTuple, Any, List, Callable, Collection, Union
+from typing import NamedTuple, Any, List, Callable, Collection, Union, Optional
 
 import numpy as np
+import torch
 from torch import Tensor, nn
 from torch.nn import ModuleList
+from torch.nn.parallel import DistributedDataParallel
+from torch.optim.optimizer import Optimizer
 
-from config import YUMA_DATA_DIR, DSIAC_DATA_DIR
 from my_types import NoWeightDecayTypes, ParamList, BiasTypes
 
 old_filter = filter
@@ -24,38 +28,6 @@ class FilePaths(NamedTuple):
     agt_path: str
     bbox_met_path: str
     covar_json_path: str
-
-
-def make_yuma_paths(fp=None, name=None):
-    if name is None and fp is not None:
-        name, _ext = os.path.splitext(fp)
-    elif fp is not None and name is None:
-        pass
-    else:
-        raise Exception("must supply either basename of fp")
-
-    return FilePaths(
-        f"{YUMA_DATA_DIR}/avco/arf/{name}.arf",
-        f"{YUMA_DATA_DIR}/avco/agt/{name}.agt",
-        f"{YUMA_DATA_DIR}/avco/metric/{name}.bbox_met",
-        "",
-    )
-
-
-def make_dsiac_paths(fp=None, name=None):
-    if name is None and fp is not None:
-        name, _ext = os.path.splitext(fp)
-    elif fp is not None and name is None:
-        pass
-    else:
-        raise Exception("must supply either basename of fp")
-
-    return FilePaths(
-        f"{DSIAC_DATA_DIR}/cegr/arf/{name}.arf",
-        f"{DSIAC_DATA_DIR}/cegr/agt/{name}.agt",
-        f"{DSIAC_DATA_DIR}/Metric/{name}.bbox_met",
-        f"{DSIAC_DATA_DIR}/annotated-jsons/{name}.json",
-    )
 
 
 def basename(fp):
@@ -182,3 +154,61 @@ def lr_range(lr: Union[float, slice], layer_groups: ModuleList) -> np.ndarray:
     else:
         res = [lr.stop / 10] * (len(layer_groups) - 1) + [lr.stop]
     return np.array(res)
+
+
+def grouper(iterable, n, fillvalue=None):
+    "Collect data into fixed-length chunks or blocks"
+    # grouper('ABCDEFG', 3, 'x') --> ABC DEF Gxx"
+    args = [iter(iterable)] * n
+    return zip_longest(*args, fillvalue=fillvalue)
+
+
+def save_model(
+        file_path: Union[Path, str], model: nn.Module, opt: Optional[Optimizer] = None
+):
+    if rank_distrib():
+        return  # don't save if slave proc
+    if opt is not None:
+        state = {"model": get_model(model).state_dict(), "optimizer": opt.state_dict()}
+    else:
+        state = get_model(model).state_dict()
+
+    torch.save(state, f"{file_path}")
+
+
+def remove_module_load(state_dict):
+    """create new OrderedDict that does not contain `module.`"""
+    new_state_dict = OrderedDict()
+    for k, v in state_dict.items():
+        new_state_dict[k[7:]] = v
+    return new_state_dict
+
+
+def get_model(model: nn.Module):
+    "Return the model maybe wrapped inside `model`."
+    return (
+        model.module
+        if isinstance(model, (DistributedDataParallel, nn.DataParallel))
+        else model
+    )
+
+
+def load_model_state(
+        *,
+        model: nn.Module,
+        file_path: Union[Path, str],
+        device: torch.device,
+        opt: Optional[Optimizer] = None,
+        strict: bool = True,
+        remove_module: bool = False,
+):
+    source = f"{file_path}"
+    state = torch.load(source, map_location=device)
+    model_state = state["model"]
+    if remove_module:
+        model_state = remove_module_load(model_state)
+    get_model(model).load_state_dict(model_state, strict=strict)
+    if opt is not None:
+        opt.load_state_dict(state["optimizer"])
+    del state
+    gc.collect()
