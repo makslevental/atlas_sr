@@ -5,12 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from fastprogress import master_bar
-from torch import nn
 from torch.optim.lr_scheduler import _LRScheduler
-from torch.optim.optimizer import Optimizer
-
-from data.databunch import DataBunch
-from my_types import Loss
 
 
 class LRFinder(object):
@@ -47,13 +42,13 @@ class LRFinder(object):
     """
 
     def __init__(
-        self,
-        model,
-        optimizer,
-        criterion,
-        device=None,
-        memory_cache=True,
-        cache_dir=None,
+            self,
+            model,
+            optimizer,
+            criterion,
+            device=None,
+            memory_cache=True,
+            cache_dir=None,
     ):
         self.model = model
         self.optimizer = optimizer
@@ -83,14 +78,14 @@ class LRFinder(object):
         self.model.to(self.model_device)
 
     def range_test(
-        self,
-        train_loader,
-        val_loader=None,
-        end_lr=1,
-        num_iter=100,
-        step_mode="exp",
-        smooth_f=0.05,
-        diverge_th=5,
+            self,
+            train_loader,
+            val_loader=None,
+            end_lr=1,
+            num_iter=100,
+            step_mode="exp",
+            smooth_f=0.05,
+            diverge_th=5,
     ):
         """Performs the learning rate range test.
 
@@ -348,4 +343,3 @@ class StateCacher(object):
         for k in self.cached:
             if os.path.exists(self.cached[k]):
                 os.remove(self.cached[k])
-

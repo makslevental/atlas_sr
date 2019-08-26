@@ -31,7 +31,7 @@ class CommonPipeline(Pipeline, ABC):
 
 class HybridTrainPipe(Pipeline):
     def __init__(
-            self, batch_size, num_threads, device_id, data_dir, crop, dali_cpu=False
+        self, batch_size, num_threads, device_id, data_dir, crop, dali_cpu=False
     ):
         super(HybridTrainPipe, self).__init__(
             batch_size, num_threads, device_id, seed=12 + device_id
@@ -103,8 +103,12 @@ class MXNetReaderPipeline(CommonPipeline):
     def __init__(self, batch_size, num_threads, device_id, num_gpus):
         super(MXNetReaderPipeline, self).__init__(batch_size, num_threads, device_id)
         self.input = ops.MXNetReader(
-            path=["/home/maksim/data/ILSVRC2017_CLS-LOC/ILSVRC/Data/CLS-LOC/imagenet_rec.rec"],
-            index_path=["/home/maksim/data/ILSVRC2017_CLS-LOC/ILSVRC/Data/CLS-LOC/imagenet_rec.idx"],
+            path=[
+                "/home/maksim/data/ILSVRC2017_CLS-LOC/ILSVRC/Data/CLS-LOC/imagenet_rec.rec"
+            ],
+            index_path=[
+                "/home/maksim/data/ILSVRC2017_CLS-LOC/ILSVRC/Data/CLS-LOC/imagenet_rec.idx"
+            ],
             random_shuffle=True,
             shard_id=device_id,
             num_shards=num_gpus,

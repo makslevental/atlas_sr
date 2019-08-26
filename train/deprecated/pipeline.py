@@ -1,5 +1,5 @@
 import inspect
-from abc import ABC, abstractmethod
+from abc import ABC
 from dataclasses import dataclass, replace
 from enum import Enum, auto
 from typing import Any, List, Optional
@@ -76,9 +76,9 @@ class Pipeline:
     __state: PipelineState
 
     def __init__(
-        self,
-        callbacks: Optional[List[Callback]] = None,
-        metrics: Optional[List[Callback]] = None,
+            self,
+            callbacks: Optional[List[Callback]] = None,
+            metrics: Optional[List[Callback]] = None,
     ):
         if metrics is None:
             metrics = []
@@ -96,7 +96,7 @@ class Pipeline:
             cb_kwargs = {
                 kw: kwarg
                 for kw, kwarg in list(kwargs.items())
-                + list(self.__state.__dict__.items())
+                                 + list(self.__state.__dict__.items())
                 if kw in inspect.getfullargspec(cb_fn).kwonlyargs
             }
 
@@ -125,7 +125,7 @@ class Pipeline:
         self.call_cb("epoch_begin", **kwargs)
 
     def on_batch_begin(
-        self, *, x: Tensor, y: Tensor, run_mode: RunMode = RunMode.TRAIN, **kwargs
+            self, *, x: Tensor, y: Tensor, run_mode: RunMode = RunMode.TRAIN, **kwargs
     ):
         self.__state = replace(
             self.__state,
@@ -155,14 +155,14 @@ class Pipeline:
         self.call_cb("step_end", **kwargs)
 
     def on_batch_end(
-        self,
-        *,
-        loss: Optional[Tensor] = None,
-        validation_loss: Optional[Tensor] = None,
-        **kwargs,
+            self,
+            *,
+            loss: Optional[Tensor] = None,
+            validation_loss: Optional[Tensor] = None,
+            **kwargs,
     ):
         assert (
-            loss is not None or validation_loss is not None
+                loss is not None or validation_loss is not None
         ), "need to provide either loss or validation loss"
         losses = {}
         if loss is not None:

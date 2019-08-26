@@ -1,9 +1,14 @@
+import glob
+import os
 import struct
+from multiprocessing import Process
 
 import numpy as np
 from matplotlib import pyplot as plt
+from tqdm import tqdm
 
-from config import DSIAC_DATA_DIR
+from config.config import DSIAC_ARFS_DIR
+from util.util import grouper
 
 
 class ARF:
@@ -64,7 +69,6 @@ def make_arf_frame_fig(im, dpi) -> plt.Figure:
     px, py = im.shape
     print(px, py)
     fig = plt.figure(figsize=(py / np.float(dpi), px / np.float(dpi)))
-    # fig = plt.figure()
     vmin, vmax = np.percentile(im, [0.5, 99.5])
     ax = fig.add_axes([0.0, 0.0, 1.0, 1.0], yticks=[], xticks=[], frame_on=False)
     ax.imshow(im, vmin=vmin, vmax=vmax, cmap="gray")
@@ -72,12 +76,30 @@ def make_arf_frame_fig(im, dpi) -> plt.Figure:
     return fig
 
 
+def dump_all_frames_all_arfs(arfs_dir: str, dump_dir: str, frame_rate: int = 30):
+    def dump_arf(arf_fp):
+        arf = ARF(arf_fp)
+
+        basename, _ext = os.path.splitext(os.path.basename(arf_fp))
+        frames_dump_dir = os.path.join(dump_dir, basename)
+        if not os.path.exists(frames_dump_dir):
+            os.mkdir(frames_dump_dir)
+
+        for n in tqdm(range(0, arf.frames, frame_rate), basename):
+            arf.save_mat(n, os.path.join(frames_dump_dir, f"{n}.tiff"))
+
+    num_processes = 16
+    for arf_fps in grouper(
+            sorted(glob.glob(f"{arfs_dir}/*.arf")), num_processes, None
+    ):
+        processes = []
+        for rank in range(num_processes):
+            p = Process(target=dump_arf, args=(arf_fps[rank],))
+            p.start()
+            processes.append(p)
+        for p in processes:
+            p.join()
+
+
 if __name__ == "__main__":
-    arf = ARF(f"{DSIAC_DATA_DIR}/cegr/arf/cegr02003_0009.arf")
-    # arf.show_frame(1, "")
-    arf.save_frame(
-        1, "/home/maksim/dev_projects/SRGAN/upscaled_output/cegr02003_0009.tiff"
-    )
-    arf.save_mat(
-        1, "/home/maksim/dev_projects/SRGAN/upscaled_output/cegr02003_0009.imsave.tiff"
-    )
+    dump_all_frames_all_arfs(DSIAC_ARFS_DIR, "/tmp")

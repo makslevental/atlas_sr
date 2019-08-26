@@ -2,15 +2,14 @@ from typing import Optional
 
 import numpy as np
 import torch
-from fastprogress import master_bar, progress_bar
 from torch import nn, Tensor
 from torch.optim.optimizer import Optimizer
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from data.databunch import DataBunch
 from my_types import Loss
-from train.pipeline import Pipeline, RunMode
-from util import first_el
+from train.deprecated.pipeline import Pipeline, RunMode
 
 
 def main_train(
@@ -28,7 +27,7 @@ def main_train(
         Use a smaller batch size (batch size={data.train_dl.batch_size} for {len(data.train_dl.dataset)} elements)."""
 
     pipeline_handler.on_train_begin(epochs=epochs)
-    pbar = master_bar(range(epochs))
+    pbar = tqdm(range(epochs))
 
     exception = None
     try:
@@ -37,7 +36,7 @@ def main_train(
 
             pipeline_handler.on_epoch_begin()
 
-            for xb, yb in progress_bar(data.train_dl, parent=pbar):
+            for xb, yb in tqdm(data.train_dl):
                 pipeline_handler.on_batch_begin(x=xb, y=yb)
                 loss = loss_batch(
                     model=model,
@@ -111,13 +110,12 @@ def validate(
         dl: DataLoader,
         pipeline_handler: Pipeline,
         loss_func: Optional[Loss] = None,
-        pbar: Optional = None,
         n_batch: Optional[int] = None,
 ) -> Tensor:
     model.eval()
     with torch.no_grad():
         val_losses, nums = [], []
-        for xb, yb in progress_bar(dl, parent=pbar, leave=(pbar is not None)):
+        for xb, yb in tqdm(dl):
             pipeline_handler.on_batch_begin(x=xb, y=yb, run_mode=RunMode.TRAIN)
 
             val_loss = loss_batch(
@@ -138,46 +136,3 @@ def validate(
             val_losses.append(val_loss)
         nums = np.array(nums, dtype=np.float32)
         return (torch.stack(val_losses).data.cpu().numpy() * nums).sum() / nums.sum()
-
-# def fit_one_cycle(
-#     learn: Learner,
-#     cyc_len: int,
-#     max_lr: Union[Floats, slice] = DEFAULTS.learning_rate,
-#     moms: Tuple[float, float] = (0.95, 0.85),
-#     div_factor: float = 25.0,
-#     pct_start: float = 0.3,
-#     final_div: float = None,
-#     wd: float = None,
-#     callbacks: Optional[Callback] = None,
-#     tot_epochs: int = None,
-#     start_epoch: int = None,
-# ) -> None:
-#     "Fit a model following the 1cycle policy."
-#     max_lr = learn.lr_range(max_lr)
-#     callbacks = list(callbacks)
-#     callbacks.append(
-#         OneCycleScheduler(
-#             learn,
-#             max_lr,
-#             moms=moms,
-#             div_factor=div_factor,
-#             pct_start=pct_start,
-#             final_div=final_div,
-#             tot_epochs=tot_epochs,
-#             start_epoch=start_epoch,
-#         )
-#     )
-#     learn.fit(cyc_len, max_lr, wd=wd, callbacks=callbacks)
-
-
-# def lr_find(
-#     *,
-#     model: nn.Module,
-#     optimizer: optim.Optimizer,
-#     loss_func: LossFunction,
-#     train_dataloader: DataLoader,
-#     end_lr: float,
-# ):
-#     lr_finder = LRFinder(model, optimizer, loss_func, device="cuda")
-#     lr_finder.range_test(train_dataloader, end_lr=end_lr, num_iter=100)
-#     lr_finder.plot()
