@@ -10,7 +10,7 @@ import pandas as pd
 import yaml
 from yaml import CLoader
 
-from dsiac.util import basename
+from util.util import basename
 
 
 class AGT:
