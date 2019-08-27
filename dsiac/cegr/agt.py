@@ -1,5 +1,6 @@
 import copy
 import csv
+import glob
 import json
 import re
 from collections import defaultdict
@@ -10,8 +11,11 @@ import numpy as np
 import pandas as pd
 import yaml
 from matplotlib import patches
+from pymongo import MongoClient
+from tqdm import tqdm
 from yaml import CLoader
 
+from config.config import DSIAC_AGTS_DIR
 from util.util import basename
 
 
@@ -41,7 +45,7 @@ class AGT:
 
 def read_agt(fp):
     f = open(fp).read()
-    r = re.sub(r"\s+{", ":", f).replace("}", "").replace("\t", "    ")
+    r = re.sub(r"\s+{", ":", f).replace("}", "").replace("\t", "    ").replace('"', "")
 
     conts = ["SenUpd", "TgtUpd", "Tgt"]
     for cont in conts:
@@ -75,10 +79,12 @@ def read_agt(fp):
         "Fov",
         "PixBox",
         "PixRange",
-        "Keyword",
     ]
     for ident in idents:
-        r = r.replace(ident, f"{ident}:")
+        r = re.sub(rf"^(\s*){ident}", rf"\1{ident}:", r, 0, re.MULTILINE)
+
+    r = re.sub(r"Keyword\s*(\w*)\s*(-?\d*\.?\d*).*", r"\1: \2", r)
+
     y = yaml.load(r, Loader=CLoader)
     # ordering
 
@@ -86,6 +92,12 @@ def read_agt(fp):
     agt["TgtSect"] = [
         tgt for _, tgt in sorted(list(agt["TgtSect"].items()), key=itemgetter(0))
     ]
+
+    sensor_updates = []
+    for sen in sorted(agt["SenSect"].keys()):
+        if "SenUpd." in sen:
+            sensor_updates.append(agt["SenSect"].pop(sen))
+    agt["SenSect"] = sensor_updates
 
     for tgt_upt in agt["TgtSect"]:
         tgt_upt["Targets"] = []
@@ -190,3 +202,55 @@ def create_bbox_patches(bbox: BoundingBox, color="red"):
     circle = patches.Circle(xy=(bbox.tgtx, bbox.tgty), radius=2)
 
     return rect, circle
+
+
+def read_all_agts():
+    client = MongoClient("localhost", 27017)
+    db = client["dsiac"]
+    agts_table = db.agts
+    for agt_file_fp in tqdm(glob.glob(f"{DSIAC_AGTS_DIR}/*.agt")):
+        agts_table.insert_one(read_agt(agt_file_fp))
+
+
+def query_all_agts():
+    client = MongoClient("localhost", 27017)
+    db = client["dsiac"]
+    agts_table = db.agts
+    df = pd.DataFrame(columns=["scenario", "tgt_type", "slant_range"])
+    i = 0
+    for agt in tqdm(agts_table.find(
+            {
+                "TgtSect": {
+                    "$elemMatch": {
+                        "Targets": {
+                            "$elemMatch": {
+                                # "TgtType": "SUV",
+                                "SlantRange": {"$lte": 50000, "$gte": 1}
+                            }
+                        }
+                    }
+                }
+            },
+            {"PrjSect": 1, "TgtSect": 1},
+    ), "agt"):
+        for tgt_upd in tqdm(agt["TgtSect"], "tgt_upd"):
+            for tgt in tgt_upd["Targets"]:
+                df.loc[i] = [
+                    agt["PrjSect"]["Name"],
+                    tgt["TgtType"],
+                    int(tgt["Range"]),
+                ]
+                i += 1
+            break
+
+    df.sort_values(["tgt_type", "slant_range"]).to_csv("tgts.csv", index=False)
+
+
+def query_agts():
+    df = pd.read_csv("tgts.csv")
+    df.sort_values(["TgtType", "Range"]).to_csv("tgts.csv", index=False)
+
+
+if __name__ == "__main__":
+    # query_all_agts()
+    query_agts()
