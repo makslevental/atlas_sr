@@ -27,6 +27,9 @@ except ImportError:
 
 parser = argparse.ArgumentParser(description="PyTorch ImageNet Training")
 parser.add_argument("--local_rank", default=0, type=int)
+parser.add_argument('--mx-path')
+parser.add_argument('--mx-index-path')
+
 args = parser.parse_args()
 cudnn.benchmark = True
 
@@ -49,6 +52,9 @@ args.print_freq = 10
 
 args.distributed = False
 args.world_size = 1
+
+assert os.path.exists(args.mx_path)
+assert os.path.exists(args.mx_index_path)
 
 if "WORLD_SIZE" in os.environ:
     args.world_size = int(os.environ["WORLD_SIZE"])
@@ -151,8 +157,8 @@ def main():
         device_id=args.local_rank,
         crop=crop_size,
         dali_cpu=args.dali_cpu,
-        mx_path="/home/maksim/data/ILSVRC2017_CLS-LOC/ILSVRC/Data/CLS-LOC/imagenet_rec.rec",
-        mx_index_path="/home/maksim/data/ILSVRC2017_CLS-LOC/ILSVRC/Data/CLS-LOC/imagenet_rec.idx",
+        mx_path=args.mx_path,
+        mx_index_path=args.mx_index_path,
     )
     pipe.build()
     train_loader = DALIClassificationIterator(
