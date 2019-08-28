@@ -10,7 +10,9 @@ rm -rf libyaml \
   && make && make install \
   && rm -rf PyYAML-5.1 && wget http://pyyaml.org/download/pyyaml/PyYAML-5.1.tar.gz \
   && tar xvf PyYAML-5.1.tar.gz && pushd PyYAML-5.1 \
-  && LD_LIBRARY_PATH=$HOME/libyaml python setup.py --with-libyaml install \
+  && sed -i '/#include_dirs/s/#include.*/include_dirs=$HOME\/libyaml\/include/' setup.cfg \
+  && sed -i '/#library_dirs/s/#library.*/library_dirs=$HOME\/libyaml\/lib/' setup.cfg \
+  && python setup.py --with-libyaml -I $HOME/libyaml/include -L $HOME/libyaml/lib install \
   && popd && popd \
   && rm -rf PyYAML-5.1.tar.gz PyYAML-5.1 libyaml
 
