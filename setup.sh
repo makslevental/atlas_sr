@@ -15,8 +15,6 @@ rm -rf libyaml \
   && popd && popd \
   && rm -rf PyYAML-5.1.tar.gz PyYAML-5.1 libyaml
 
-python -m pip install pip-tools
-pip-compile requirements.in
 python -m pip install -r requirements.txt
 
 rm -rf apex \

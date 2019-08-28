@@ -9,3 +9,4 @@ nvidia-dali
 matplotlib
 pymongo
 mxnet
+pip-tools
