@@ -7,14 +7,13 @@ import torch
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 import torch.nn as nn
-from apex.parallel import DistributedDataParallel
-
 import torch.nn.parallel
 import torch.optim
 import torch.utils.data
 import torch.utils.data.distributed
 import torchvision.models as models
-from torch.autograd import Variable
+
+from data_utils.dali import HybridTrainPipe
 
 try:
     from nvidia.dali.plugin.pytorch import DALIClassificationIterator
@@ -26,232 +25,34 @@ except ImportError:
         "Please install DALI from https://www.github.com/NVIDIA/DALI to run this example."
     )
 
-model_names = sorted(
-    name
-    for name in models.__dict__
-    if name.islower() and not name.startswith("__") and callable(models.__dict__[name])
-)
-
 parser = argparse.ArgumentParser(description="PyTorch ImageNet Training")
-parser.add_argument(
-    "data",
-    metavar="DIR",
-    nargs="*",
-    help="path(s) to dataset (if one path is provided, it is assumed\n"
-    + 'to have subdirectories named "train" and "val"; alternatively,\n'
-    + "train and val paths can be specified directly by providing both paths as arguments)",
-)
-parser.add_argument(
-    "--arch",
-    "-a",
-    metavar="ARCH",
-    default="resnet18",
-    choices=model_names,
-    help="model architecture: " + " | ".join(model_names) + " (default: resnet18)",
-)
-parser.add_argument(
-    "-j",
-    "--workers",
-    default=4,
-    type=int,
-    metavar="N",
-    help="number of data loading workers (default: 4)",
-)
-parser.add_argument(
-    "--epochs", default=90, type=int, metavar="N", help="number of total epochs to run"
-)
-parser.add_argument(
-    "--start-epoch",
-    default=0,
-    type=int,
-    metavar="N",
-    help="manual epoch number (useful on restarts)",
-)
-parser.add_argument(
-    "-b",
-    "--batch-size",
-    default=256,
-    type=int,
-    metavar="N",
-    help="mini-batch size (default: 256)",
-)
-parser.add_argument(
-    "--lr",
-    "--learning-rate",
-    default=0.1,
-    type=float,
-    metavar="LR",
-    help="initial learning rate",
-)
-parser.add_argument("--momentum", default=0.9, type=float, metavar="M", help="momentum")
-parser.add_argument(
-    "--weight-decay",
-    "--wd",
-    default=1e-4,
-    type=float,
-    metavar="W",
-    help="weight decay (default: 1e-4)",
-)
-parser.add_argument(
-    "--print-freq",
-    "-p",
-    default=10,
-    type=int,
-    metavar="N",
-    help="print frequency (default: 10)",
-)
-parser.add_argument(
-    "--resume",
-    default="",
-    type=str,
-    metavar="PATH",
-    help="path to latest checkpoint (default: none)",
-)
-parser.add_argument(
-    "-e",
-    "--evaluate",
-    dest="evaluate",
-    action="store_true",
-    help="evaluate model on validation set",
-)
-parser.add_argument(
-    "--pretrained", dest="pretrained", action="store_true", help="use pre-trained model"
-)
-parser.add_argument("--fp16", action="store_true", help="Run model fp16 mode.")
-parser.add_argument(
-    "--dali_cpu", action="store_true", help="Runs CPU based version of DALI pipeline."
-)
-parser.add_argument(
-    "--static-loss-scale",
-    type=float,
-    default=1,
-    help="Static loss scale, positive power of 2 values can improve fp16 convergence.",
-)
-parser.add_argument(
-    "--dynamic-loss-scale",
-    action="store_true",
-    help="Use dynamic loss scaling.  If supplied, this argument supersedes "
-    + "--static-loss-scale.",
-)
-parser.add_argument(
-    "--prof",
-    dest="prof",
-    action="store_true",
-    help="Only run 10 iterations for profiling.",
-)
-parser.add_argument(
-    "-t", "--test", action="store_true", help="Launch test mode with preset arguments"
-)
-
 parser.add_argument("--local_rank", default=0, type=int)
-
+args = parser.parse_args()
 cudnn.benchmark = True
 
-
-class HybridTrainPipe(Pipeline):
-    def __init__(
-        self, batch_size, num_threads, device_id, crop, dali_cpu=False
-    ):
-        super(HybridTrainPipe, self).__init__(
-            batch_size, num_threads, device_id, seed=12 + device_id
-        )
-        self.input = ops.MXNetReader(
-            path=["/home/maksim/data/ILSVRC2017_CLS-LOC/ILSVRC/Data/CLS-LOC/imagenet_rec.rec"],
-            index_path=["/home/maksim/data/ILSVRC2017_CLS-LOC/ILSVRC/Data/CLS-LOC/imagenet_rec.idx"],
-            random_shuffle=True,
-            shard_id=device_id,
-            num_shards=3,
-        )
-        # let user decide which pipeline works him bets for RN version he runs
-        dali_device = "cpu" if dali_cpu else "gpu"
-        decoder_device = "cpu" if dali_cpu else "mixed"
-        # This padding sets the size of the internal nvJPEG buffers to be able to handle all images from full-sized ImageNet
-        # without additional reallocations
-        device_memory_padding = 211025920 if decoder_device == "mixed" else 0
-        host_memory_padding = 140544512 if decoder_device == "mixed" else 0
-        self.decode = ops.ImageDecoderRandomCrop(
-            device=decoder_device,
-            output_type=types.RGB,
-            device_memory_padding=device_memory_padding,
-            host_memory_padding=host_memory_padding,
-            random_aspect_ratio=[0.8, 1.25],
-            random_area=[0.1, 1.0],
-            num_attempts=100,
-        )
-        self.res = ops.Resize(
-            device=dali_device,
-            resize_x=crop,
-            resize_y=crop,
-            interp_type=types.INTERP_TRIANGULAR,
-        )
-        self.cmnp = ops.CropMirrorNormalize(
-            device="gpu",
-            output_dtype=types.FLOAT,
-            output_layout=types.NCHW,
-            crop=(crop, crop),
-            image_type=types.RGB,
-            mean=[0.485 * 255, 0.456 * 255, 0.406 * 255],
-            std=[0.229 * 255, 0.224 * 255, 0.225 * 255],
-        )
-        self.coin = ops.CoinFlip(probability=0.5)
-        print('DALI "{0}" variant'.format(dali_device))
-
-    def define_graph(self):
-        rng = self.coin()
-        self.jpegs, self.labels = self.input(name="Reader")
-        images = self.decode(self.jpegs)
-        images = self.res(images)
-        output = self.cmnp(images.gpu(), mirror=rng)
-        return [output, self.labels]
-
-
-class HybridValPipe(Pipeline):
-    def __init__(self, batch_size, num_threads, device_id, data_dir, crop, size):
-        super(HybridValPipe, self).__init__(
-            batch_size, num_threads, device_id, seed=12 + device_id
-        )
-        self.input = ops.FileReader(
-            file_root=data_dir,
-            shard_id=args.local_rank,
-            num_shards=args.world_size,
-            random_shuffle=False,
-        )
-        self.decode = ops.ImageDecoder(device="mixed", output_type=types.RGB)
-        self.res = ops.Resize(
-            device="gpu", resize_shorter=size, interp_type=types.INTERP_TRIANGULAR
-        )
-        self.cmnp = ops.CropMirrorNormalize(
-            device="gpu",
-            output_dtype=types.FLOAT,
-            output_layout=types.NCHW,
-            crop=(crop, crop),
-            image_type=types.RGB,
-            mean=[0.485 * 255, 0.456 * 255, 0.406 * 255],
-            std=[0.229 * 255, 0.224 * 255, 0.225 * 255],
-        )
-
-    def define_graph(self):
-        self.jpegs, self.labels = self.input(name="Reader")
-        images = self.decode(self.jpegs)
-        images = self.res(images)
-        output = self.cmnp(images)
-        return [output, self.labels]
-
-
-best_prec1 = 0
-args = parser.parse_args()
-
-# test mode, use default args for sanity test
 args.fp16 = False
 args.epochs = 30
 args.start_epoch = 0
 args.arch = "resnet50"
-args.batch_size = 64
+args.batch_size = 32
 args.prof = False
+args.static_loss_scale = 1.0
+args.dynamic_loss_scale = False
+args.pretrained = False
+args.lr = 0.1
+args.momentum = 0.9
+args.workers = 1
+args.weight_decay = 1e-4
+args.resume = False
+args.dali_cpu = False
+args.print_freq = 10
 
-args.distributed = True
+args.distributed = False
+args.world_size = 1
+
 if "WORLD_SIZE" in os.environ:
-    args.distributed = int(os.environ["WORLD_SIZE"]) > 1
+    args.world_size = int(os.environ["WORLD_SIZE"])
+    args.distributed = args.world_size  > 1
 
 # make apex optional
 if args.fp16 or args.distributed:
@@ -273,11 +74,6 @@ def to_python_float(t):
 
 
 def main():
-    global best_prec1, args
-
-    args.gpu = 0
-    args.world_size = 1
-
     if args.distributed:
         args.gpu = args.local_rank % torch.cuda.device_count()
         torch.cuda.set_device(args.gpu)
@@ -335,7 +131,6 @@ def main():
                 args.resume, map_location=lambda storage, loc: storage.cuda(args.gpu)
             )
             args.start_epoch = checkpoint["epoch"]
-            best_prec1 = checkpoint["best_prec1"]
             model.load_state_dict(checkpoint["state_dict"])
             optimizer.load_state_dict(checkpoint["optimizer"])
             print(
@@ -347,80 +142,32 @@ def main():
             print("=> no checkpoint found at '{}'".format(args.resume))
 
     # Data loading code
-
-    if args.arch == "inception_v3":
-        crop_size = 299
-        val_size = 320  # I chose this value arbitrarily, we can adjust.
-    else:
-        crop_size = 224
-        val_size = 256
+    crop_size = 224
 
     pipe = HybridTrainPipe(
         batch_size=args.batch_size,
+        num_gpus=args.world_size,
         num_threads=args.workers,
         device_id=args.local_rank,
         crop=crop_size,
         dali_cpu=args.dali_cpu,
+        mx_path="/home/maksim/data/ILSVRC2017_CLS-LOC/ILSVRC/Data/CLS-LOC/imagenet_rec.rec",
+        mx_index_path="/home/maksim/data/ILSVRC2017_CLS-LOC/ILSVRC/Data/CLS-LOC/imagenet_rec.idx",
     )
     pipe.build()
     train_loader = DALIClassificationIterator(
         pipe, size=int(pipe.epoch_size("Reader") / args.world_size)
     )
 
-    # pipe = HybridValPipe(
-    #     batch_size=args.batch_size,
-    #     num_threads=args.workers,
-    #     device_id=args.local_rank,
-    #     data_dir=valdir,
-    #     crop=crop_size,
-    #     size=val_size,
-    # )
-    # pipe.build()
-    # val_loader = DALIClassificationIterator(
-    #     pipe, size=int(pipe.epoch_size("Reader") / args.world_size)
-    # )
-    #
-    # if args.evaluate:
-    #     validate(val_loader, model, criterion)
-    #     return
-
     total_time = AverageMeter()
     for epoch in range(args.start_epoch, args.epochs):
-        # train for one epoch
-
         avg_train_time = train(train_loader, model, criterion, optimizer, epoch)
         total_time.update(avg_train_time)
         if args.prof:
             break
-        # evaluate on validation set
-        # [prec1, prec5] = validate(val_loader, model, criterion)
-
-        # remember best prec@1 and save checkpoint
-        # if args.local_rank == 0:
-            # is_best = prec1 > best_prec1
-            # best_prec1 = max(prec1, best_prec1)
-            # save_checkpoint(
-            #     {
-            #         "epoch": epoch + 1,
-            #         "arch": args.arch,
-            #         "state_dict": model.state_dict(),
-            #         "best_prec1": best_prec1,
-            #         "optimizer": optimizer.state_dict(),
-            #     },
-            #     # is_best,
-            # )
-            # if epoch == args.epochs - 1:
-            #     print(
-            #         "##Top-1 {0}\n"
-            #         "##Top-5 {1}\n"
-            #         "##Perf  {2}".format(
-            #             # prec1, prec5, args.total_batch_size / total_time.avg
-            #         )
-            #     )
 
         # reset DALI iterators
         train_loader.reset()
-        # val_loader.reset()
 
 
 def train(train_loader, model, criterion, optimizer, epoch):
@@ -446,13 +193,9 @@ def train(train_loader, model, criterion, optimizer, epoch):
                 break
         # measure data loading time
         data_time.update(time.time() - end)
-
-        input_var = Variable(input)
-        target_var = Variable(target)
-
         # compute output
-        output = model(input_var)
-        loss = criterion(output, target_var)
+        output = model(input)
+        loss = criterion(output, target)
 
         # measure accuracy and record loss
         prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
@@ -523,13 +266,11 @@ def validate(val_loader, model, criterion):
         val_loader_len = int(val_loader._size / args.batch_size)
 
         target = target.cuda(non_blocking=True)
-        input_var = Variable(input)
-        target_var = Variable(target)
 
         # compute output
         with torch.no_grad():
-            output = model(input_var)
-            loss = criterion(output, target_var)
+            output = model(input)
+            loss = criterion(output, target)
 
         # measure accuracy and record loss
         prec1, prec5 = accuracy(output.data, target, topk=(1, 5))

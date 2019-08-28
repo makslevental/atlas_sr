@@ -1,4 +1,5 @@
 from train.train_srgan import main, test, plot_metrics
+from train.train_resnet_dali import main
 
 if __name__ == "__main__":
     # main(
