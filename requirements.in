@@ -1,0 +1,11 @@
+--extra-index-url https://developer.download.nvidia.com/compute/redist/cuda/10.0
+
+torch
+torchvision
+pandas
+tqdm
+Pillow
+nvidia-dali
+matplotlib
+pymongo
+mxnet

@@ -2,6 +2,7 @@ from math import log10
 from os import listdir
 from os.path import join
 
+import matplotlib.pyplot as plt
 import pandas as pd
 import torch.optim as optim
 import torch.utils.data
@@ -136,8 +137,6 @@ def train(netG, netD, optimizerG, optimizerD, generator_loss, train_loader):
         "batch_sizes": 0,
         "d_loss": 0,
         "g_loss": 0,
-        "d_score": 0,
-        "g_score": 0,
     }
 
     for data, target in tqdm(train_loader, "train"):
@@ -173,8 +172,6 @@ def train(netG, netD, optimizerG, optimizerD, generator_loss, train_loader):
         running_results["g_loss"] += g_loss.item() * batch_size
         d_loss = 1 - real_out + fake_out
         running_results["d_loss"] += d_loss.item() * batch_size
-        running_results["d_score"] += real_out.item() * batch_size
-        running_results["g_score"] += fake_out.item() * batch_size
 
     return running_results
 
@@ -201,6 +198,49 @@ def validate(netG, val_loader):
         valing_results["ssim"] = valing_results["ssims"] / valing_results["batch_sizes"]
 
     return valing_results
+
+
+def test(model_pth_fp, upscale_factor, image_fp, out_image_fp):
+    with torch.no_grad():
+        model = Generator(upscale_factor).eval()
+        state_dict = {}
+        for k, v in torch.load(model_pth_fp).items():
+            state_dict[k.replace("module.", "")] = v
+        model.load_state_dict(state_dict)
+
+        image = Image.open(image_fp)
+        image_tensor = ToTensor()(image)
+        image = image_tensor[:3, :, :].unsqueeze(0)
+        out = model(image)
+        out_img = ToPILImage()(out[0].data.cpu())
+    out_img.save(out_image_fp)
+
+
+def plot_metrics(metrics_csv_path):
+    df = pd.read_csv(metrics_csv_path)
+    fig = plt.figure()
+    ax1 = fig.add_subplot(111)
+    lns1 = ax1.plot(df.index.values, df["Loss_G"].values, "b-", label="Generator Loss")
+    for tl in ax1.get_yticklabels():
+        tl.set_color('b')
+    ax1.set_xlabel("Epoch")
+
+
+    ax2 = ax1.twinx()
+    lns2 = ax2.plot(df.index.values, df["PSNR"].values, 'r-', label="PSNR")
+    for tl in ax2.get_yticklabels():
+        tl.set_color('r')
+
+    ax3 = ax1.twinx()
+    lns3 = ax3.plot(df.index.values, df["SSIM"].values, 'g-', label="SSIM")
+    for tl in ax3.get_yticklabels():
+        tl.set_color('g')
+
+    lns = lns1 + lns2 + lns3
+    labs = [l.get_label() for l in lns]
+    ax3.legend(lns, labs, loc=0, framealpha=1)
+    plt.show()
+
 
 
 def main(
@@ -241,8 +281,6 @@ def main(
     results = {
         "d_loss": [],
         "g_loss": [],
-        "d_score": [],
-        "g_score": [],
         "psnr": [],
         "ssim": [],
     }
@@ -259,18 +297,12 @@ def main(
         torch.save(
             netD.state_dict(), f"{checkpoint_dir}/netD_epoch_{upscale_factor}_{epoch}.pth"
         )
-        # save loss\scores\psnr\ssim
+        # save loss\psnr\ssim
         results["d_loss"].append(
             running_results["d_loss"] / running_results["batch_sizes"]
         )
         results["g_loss"].append(
             running_results["g_loss"] / running_results["batch_sizes"]
-        )
-        results["d_score"].append(
-            running_results["d_score"] / running_results["batch_sizes"]
-        )
-        results["g_score"].append(
-            running_results["g_score"] / running_results["batch_sizes"]
         )
         results["psnr"].append(valing_results["psnr"])
         results["ssim"].append(valing_results["ssim"])
@@ -280,8 +312,6 @@ def main(
                 data={
                     "Loss_D": results["d_loss"],
                     "Loss_G": results["g_loss"],
-                    "Score_D": results["d_score"],
-                    "Score_G": results["g_score"],
                     "PSNR": results["psnr"],
                     "SSIM": results["ssim"],
                 },
