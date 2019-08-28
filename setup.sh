@@ -15,11 +15,12 @@ rm -rf libyaml \
   && popd && popd \
   && rm -rf PyYAML-5.1.tar.gz PyYAML-5.1 libyaml
 
-python -m pip install -r requirements.txt
+pip install --upgrade pip
+pip install -r requirements.txt
 
 rm -rf apex \
   && git clone https://github.com/NVIDIA/apex && pushd apex \
   && sed -i '/.*check_cuda_torch_binary_vs_bare_metal(torch.utils.cpp_extension.CUDA_HOME)/s/^/#/' setup.py \
-  && python -m pip install -v --no-cache-dir --global-option="--pyprof" --global-option="--cpp_ext" --global-option="--cuda_ext" ./ \
+  && pip install -v --no-cache-dir --global-option="--pyprof" --global-option="--cpp_ext" --global-option="--cuda_ext" ./ \
   && popd \
   && rm -rf apex
