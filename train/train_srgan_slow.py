@@ -202,7 +202,7 @@ def validate(netG, val_loader):
 
 def test(model_pth_fp, upscale_factor, image_fp, out_image_fp):
     with torch.no_grad():
-        model = Generator(upscale_factor).eval()
+        model = Generator(scale_factor=upscale_factor, in_channels=3).eval()
         state_dict = {}
         for k, v in torch.load(model_pth_fp).items():
             state_dict[k.replace("module.", "")] = v
@@ -225,7 +225,6 @@ def plot_metrics(metrics_csv_path):
         tl.set_color('b')
     ax1.set_xlabel("Epoch")
 
-
     ax2 = ax1.twinx()
     lns2 = ax2.plot(df.index.values, df["PSNR"].values, 'r-', label="PSNR")
     for tl in ax2.get_yticklabels():
@@ -240,7 +239,6 @@ def plot_metrics(metrics_csv_path):
     labs = [l.get_label() for l in lns]
     ax3.legend(lns, labs, loc=0, framealpha=1)
     plt.show()
-
 
 
 def main(
@@ -266,8 +264,8 @@ def main(
     )
     val_loader = DataLoader(dataset=val_set, num_workers=4, batch_size=1, shuffle=False)
 
-    netG = nn.DataParallel(Generator(upscale_factor))
-    netD = nn.DataParallel(Discriminator())
+    netG = nn.DataParallel(Generator(scale_factor=upscale_factor, in_channels=3))
+    netD = nn.DataParallel(Discriminator(in_channels=3))
     generator_criterion = GeneratorLoss()
 
     if torch.cuda.is_available():
@@ -321,3 +319,13 @@ def main(
                 metrics_csv_fp,
                 index_label="Epoch",
             )
+
+
+if __name__ == "__main__":
+    main(
+        upscale_factor=4,
+        train_data_dir="/home/maksim/data/VOC2012/train",
+        val_data_dir="/home/maksim/data/VOC2012/val",
+        checkpoint_dir="/home/maksim/dev_projects/atlas_sr/checkpoints/srgan",
+        metrics_csv_fp="/home/maksim/dev_projects/atlas_sr/checkpoints/srgan/metrics.csv",
+    )

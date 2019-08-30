@@ -102,7 +102,6 @@ total_batch_size = world_size * batch_size
 prof = False
 static_loss_scale = 1.0
 dynamic_loss_scale = False
-pretrained = False
 # lr = 0.1
 # momentum = 0.9
 workers = 4
@@ -205,8 +204,8 @@ def train(epoch):
 
     for i, data in enumerate(train_loader):
         # dali for some reason outputs HWC, we need CHW
-        lr_image = data[0]["lr_image"].permute(0, 3, 1, 2)
-        hr_image = data[0]["hr_image"].permute(0, 3, 1, 2)
+        lr_image = data[0]["lr_image"]
+        hr_image = data[0]["hr_image"]
 
         batch_size = lr_image.shape[0]
         train_loader_len = train_loader._size // batch_size
@@ -275,10 +274,15 @@ def validate():
     valing_results = {"mse": 0, "ssims": 0, "psnr": 0, "ssim": 0, "batch_sizes": 0}
     for i, data in enumerate(val_loader):
         # dali for some reason outputs HWC, we need CHW
-        lr_image = data[0]["lr_image"].permute(0, 3, 1, 2)
-        hr_image = data[0]["hr_image"].permute(0, 3, 1, 2)
+        if prof and i > 10:
+            break
+
+        lr_image = data[0]["lr_image"]
+        hr_image = data[0]["hr_image"]
         sr_image = netG(lr_image)
 
+        batch_size = lr_image.size(0)
+        valing_results["batch_sizes"] += batch_size
         batch_mse = ((sr_image - hr_image) ** 2).data.mean()
         valing_results["mse"] += batch_mse * batch_size
         batch_ssim = ssim(sr_image, hr_image).item()
@@ -346,9 +350,6 @@ if __name__ == "__main__":
 
         val_results = validate()
 
-        if prof:
-            break
-
         torch.save(
             netG.state_dict(),
             f"{checkpoint_dir}/netG_epoch_{upscale_factor}_{epoch}.pth",
@@ -369,7 +370,6 @@ if __name__ == "__main__":
                     "G_LR": results["g_lr"],
                     "D_LR": results["d_lr"],
                 },
-                index=range(1, epoch + 1),
             )
             data_frame.to_csv(
                 os.path.join(checkpoint_dir, "metrics.csv"), index_label="Epoch"
