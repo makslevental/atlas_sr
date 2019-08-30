@@ -5,9 +5,9 @@ from multiprocessing import Process
 
 import numpy as np
 from matplotlib import pyplot as plt
+from scipy.stats import median_absolute_deviation as mad
 from tqdm import tqdm
 
-from config.config import DSIAC_ARFS_DIR
 from util.util import grouper
 
 
@@ -36,7 +36,7 @@ class ARF:
         return fig
 
     def show_frame(self, n, title=None):
-        self._get_fig(n, title).show()
+        self._get_fig(n, 96, title).show()
 
     def save_frame(self, n, fp, title=None, dpi=96):
         fig = self._get_fig(n, dpi, title)
@@ -45,8 +45,8 @@ class ARF:
 
     def save_mat(self, n, fp, dpi=96):
         im = self.get_frame_mat(n)
-        vmin, vmax = np.percentile(im, [0.5, 99.5])
-        plt.imsave(fp, im, vmin=vmin, vmax=vmax, format="tiff", dpi=dpi, cmap="gray")
+        clipped_and_normed = np.clip(mad_normalization(im), -20, 20)
+        plt.imsave(fp, clipped_and_normed, format="tiff", dpi=dpi, cmap="gray")
 
 
 def read_arf(arf_fp):
@@ -69,11 +69,15 @@ def make_arf_frame_fig(im, dpi) -> plt.Figure:
     px, py = im.shape
     print(px, py)
     fig = plt.figure(figsize=(py / np.float(dpi), px / np.float(dpi)))
-    vmin, vmax = np.percentile(im, [0.5, 99.5])
     ax = fig.add_axes([0.0, 0.0, 1.0, 1.0], yticks=[], xticks=[], frame_on=False)
-    ax.imshow(im, vmin=vmin, vmax=vmax, cmap="gray")
+    clipped_and_normed = np.clip(mad_normalization(im), -20, 20)
+    ax.imshow(clipped_and_normed, cmap="gray")
 
     return fig
+
+
+def mad_normalization(x):
+    return (x - np.median(x)) / mad(x.flatten())
 
 
 def dump_all_frames_all_arfs(arfs_dir: str, dump_dir: str, frame_rate: int = 30):
@@ -102,4 +106,5 @@ def dump_all_frames_all_arfs(arfs_dir: str, dump_dir: str, frame_rate: int = 30)
 
 
 if __name__ == "__main__":
-    dump_all_frames_all_arfs(DSIAC_ARFS_DIR, "/tmp")
+    # dump_all_frames_all_arfs(DSIAC_ARFS_DIR, "/tmp")
+    ARF("/home/maksim/dev_projects/atlas_sr/data/cegr00101_0000.arf").show_frame(1)
