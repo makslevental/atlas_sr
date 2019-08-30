@@ -1,5 +1,9 @@
+import glob
+import os
+
 import nvidia.dali.ops as ops
 import nvidia.dali.types as types
+from PIL import Image
 from matplotlib import gridspec, pyplot as plt
 from nvidia.dali.pipeline import Pipeline
 
@@ -97,39 +101,42 @@ class SRGANPipeline(Pipeline):
         dali_device = "cpu" if dali_cpu else "gpu"
         # dali for some reason does HWC ordering, we need C, H, W
         # not we're not actually doing a crop
-        # self.permute_norm = ops.CropMirrorNormalize(
-        #     device=dali_device,
-        #     mean=[0.485 * 255, 0.456 * 255, 0.406 * 255],
-        #     std=[0.229 * 255, 0.224 * 255, 0.225 * 255],
-        #     output_layout=types.NCHW,
-        #     # image_type=types.GRAY,
-        #     output_dtype=types.UINT8
-        #
-        # )
-        # self.gray = ops.ColorSpaceConversion(
-        #     device=dali_device, image_type=types.RGB, output_type=types.GRAY
-        # )
-        self.cast = ops.Cast(
-            device=dali_device,
-            dtype=types.FLOAT
-        )
         self.res = ops.Resize(
             device=dali_device,
             resize_x=crop // upscale_factor,
             resize_y=crop // upscale_factor,
             interp_type=types.INTERP_CUBIC,
-            image_type=types.GRAY,
+            # image_type=types.GRAY,
         )
+        self.cmp = ops.CropMirrorNormalize(
+            device=dali_device,
+            mean=[0.485 * 255],
+            std=[0.229 * 255],
+            output_layout=types.NCHW,
+            # image_type=types.GRAY,
+            output_dtype=types.FLOAT
+        )
+        self.coin = ops.CoinFlip(probability=0.5)
+        # self.gray = ops.ColorSpaceConversion(
+        #     device=dali_device, image_type=types.RGB, output_type=types.GRAY
+        # )
+        # self.cast = ops.Cast(
+        #     device=dali_device,
+        #     dtype=types.FLOAT
+        # )
 
     def define_graph(self):
+        c = self.coin()
         jpegs, _labels = self.input(name="Reader")
         hr_images = self.decode(
             jpegs, crop_pos_x=self.u_rng(), crop_pos_y=self.u_rng()
         )
         lr_images = self.res(hr_images)
+        hr_images = self.cmp(hr_images, mirror=c)
+        lr_images = self.cmp(lr_images, mirror=c)
 
-        hr_images = self.cast(hr_images)
-        lr_images = self.cast(lr_images)
+        # hr_images = self.cast(hr_images)
+        # lr_images = self.cast(lr_images)
         # hr_images = self.permute_norm(hr_images)
         # lr_images = self.permute_norm(lr_images)
 
@@ -200,7 +207,7 @@ def show_images(image_batch, batch_size):
     for j in range(rows * columns):
         plt.subplot(gs[j])
         plt.axis("off")
-        plt.imshow(image_batch.at(j).squeeze(2), cmap="gray")
+        plt.imshow(image_batch.at(j).squeeze(0), cmap="gray")
     plt.show()
 
 
@@ -208,19 +215,38 @@ def test_mxnet_pipeline():
     batch_size = 16
     pipe = SRGANMXNetPipeline(
         batch_size=batch_size,
-        num_gpus=4,
+        num_gpus=1,
         num_threads=4,
         device_id=0,
-        crop=88,
+        crop=224,
         upscale_factor=2,
-        mx_path="/home/maksim/data/ILSVRC2017_CLS-LOC/ILSVRC/Data/CLS-LOC/imagenet_rec.rec",
-        mx_index_path="/home/maksim/data/ILSVRC2017_CLS-LOC/ILSVRC/Data/CLS-LOC/imagenet_rec.idx",
+        mx_path="/home/maksim/data/ILSVRC2017_CLS-LOC/ILSVRC/Data/CLS-LOC/imagenet_val.rec",
+        mx_index_path="/home/maksim/data/ILSVRC2017_CLS-LOC/ILSVRC/Data/CLS-LOC/imagenet_val.idx",
     )
     pipe.build()
+    # train_loader = DALIGenericIterator(
+    #     pipelines=[pipe],
+    #     output_map=["lr_image", "hr_image"],
+    #     size=int(pipe.epoch_size("Reader") / 1),
+    #     auto_reset=True,
+    # )
+    # for i, data in enumerate(train_loader):
+    #     print(i, data[0]["hr_image"].shape)
     lr_images, hr_images = pipe.run()
     show_images(hr_images.as_cpu(), batch_size)
     show_images(lr_images.as_cpu(), batch_size)
 
+def image_reses():
+    image_rezes = []
+    for img_fp in glob.glob("/home/maksim/data/ILSVRC2017_CLS-LOC/ILSVRC/Data/CLS-LOC/val/*.JPEG"):
+        h, w = Image.open(img_fp).size
+        if h < 224 or w < 224:
+            print(h, w)
+            os.remove(img_fp)
+        else:
+            image_rezes.append(img_fp)
+    print(len(image_rezes))
 
 if __name__ == "__main__":
     test_mxnet_pipeline()
+    # image_reses()

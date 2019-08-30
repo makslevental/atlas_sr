@@ -188,7 +188,5 @@ def test_gray():
     print(fake_img, fake_out, real_out, loss)
 
 
-
-
 if __name__ == "__main__":
     test_gray()
