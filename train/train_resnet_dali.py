@@ -13,7 +13,7 @@ import torch.utils.data
 import torch.utils.data.distributed
 import torchvision.models as models
 
-from data_utils.dali import HybridTrainPipe
+from data_utils.dali import ResNetImageNetPipeline
 
 try:
     from nvidia.dali.plugin.pytorch import DALIClassificationIterator
@@ -150,7 +150,7 @@ def main():
     # Data loading code
     crop_size = 224
 
-    pipe = HybridTrainPipe(
+    pipe = ResNetImageNetPipeline(
         batch_size=args.batch_size,
         num_gpus=args.world_size,
         num_threads=args.workers,
