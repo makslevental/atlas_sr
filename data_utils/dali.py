@@ -80,8 +80,7 @@ class SRGANPipeline(Pipeline):
         super(SRGANPipeline, self).__init__(
             batch_size, num_threads, device_id, seed=12 + device_id
         )
-        self.pos_rng_x = ops.Uniform(range=(0.0, 1.0))
-        self.pos_rng_y = ops.Uniform(range=(0.0, 1.0))
+        self.u_rng = ops.Uniform(range=(0.0, 1.0))
         crop = calculate_valid_crop_size(crop, upscale_factor)
         decoder_device = "cpu" if dali_cpu else "mixed"
         # This padding sets the size of the internal nvJPEG buffers to be able to handle all images from full-sized ImageNet
@@ -95,8 +94,25 @@ class SRGANPipeline(Pipeline):
             host_memory_padding=host_memory_padding,
             crop=crop,
         )
-
         dali_device = "cpu" if dali_cpu else "gpu"
+        # dali for some reason does HWC ordering, we need C, H, W
+        # not we're not actually doing a crop
+        # self.permute_norm = ops.CropMirrorNormalize(
+        #     device=dali_device,
+        #     mean=[0.485 * 255, 0.456 * 255, 0.406 * 255],
+        #     std=[0.229 * 255, 0.224 * 255, 0.225 * 255],
+        #     output_layout=types.NCHW,
+        #     # image_type=types.GRAY,
+        #     output_dtype=types.UINT8
+        #
+        # )
+        # self.gray = ops.ColorSpaceConversion(
+        #     device=dali_device, image_type=types.RGB, output_type=types.GRAY
+        # )
+        self.cast = ops.Cast(
+            device=dali_device,
+            dtype=types.FLOAT
+        )
         self.res = ops.Resize(
             device=dali_device,
             resize_x=crop // upscale_factor,
@@ -106,11 +122,20 @@ class SRGANPipeline(Pipeline):
         )
 
     def define_graph(self):
-        jpegs, _labels = self.input()
-        pos_x = self.pos_rng_x()
-        pos_y = self.pos_rng_y()
-        hr_images = self.decode(jpegs, crop_pos_x=pos_x, crop_pos_y=pos_y)
+        jpegs, _labels = self.input(name="Reader")
+        hr_images = self.decode(
+            jpegs, crop_pos_x=self.u_rng(), crop_pos_y=self.u_rng()
+        )
         lr_images = self.res(hr_images)
+
+        hr_images = self.cast(hr_images)
+        lr_images = self.cast(lr_images)
+        # hr_images = self.permute_norm(hr_images)
+        # lr_images = self.permute_norm(lr_images)
+
+        # hr_images = self.gray(hr_images)
+        # lr_images = self.gray(lr_images)
+
 
         return [lr_images, hr_images]
 
@@ -118,6 +143,7 @@ class SRGANPipeline(Pipeline):
 class SRGANMXNetPipeline(SRGANPipeline):
     def __init__(
         self,
+        *,
         batch_size,
         num_gpus,
         num_threads,
@@ -143,6 +169,7 @@ class SRGANMXNetPipeline(SRGANPipeline):
 class SRGANFilePipeline(SRGANPipeline):
     def __init__(
         self,
+        *,
         batch_size,
         num_gpus,
         num_threads,
@@ -177,19 +204,23 @@ def show_images(image_batch, batch_size):
     plt.show()
 
 
-def test_pipeline():
+def test_mxnet_pipeline():
     batch_size = 16
-    pipe = SRGANFilePipeline(
-        batch_size,
-        1,
-        4,
-        0,
-        32,
-        2,
-        "/home/maksim/dev_projects/atlas_sr/data/tiny-imagenet-200/val/images",
-        "/home/maksim/dev_projects/atlas_sr/data/tiny-imagenet-200/val/val_annotations.1.txt",
+    pipe = SRGANMXNetPipeline(
+        batch_size=batch_size,
+        num_gpus=4,
+        num_threads=4,
+        device_id=0,
+        crop=88,
+        upscale_factor=2,
+        mx_path="/home/maksim/data/ILSVRC2017_CLS-LOC/ILSVRC/Data/CLS-LOC/imagenet_rec.rec",
+        mx_index_path="/home/maksim/data/ILSVRC2017_CLS-LOC/ILSVRC/Data/CLS-LOC/imagenet_rec.idx",
     )
     pipe.build()
     lr_images, hr_images = pipe.run()
-    show_images(lr_images.as_cpu(), batch_size)
     show_images(hr_images.as_cpu(), batch_size)
+    show_images(lr_images.as_cpu(), batch_size)
+
+
+if __name__ == "__main__":
+    test_mxnet_pipeline()

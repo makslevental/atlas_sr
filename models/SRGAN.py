@@ -1,18 +1,19 @@
 import math
 
 import torch
-import torch.nn.functional as F
+from PIL import Image
 from torch import nn
 from torchvision.models import vgg16
+from torchvision.transforms import ToTensor, Resize, Compose
 
 
 class Generator(nn.Module):
-    def __init__(self, scale_factor):
+    def __init__(self, *, scale_factor, in_channels):
         upsample_block_num = int(math.log(scale_factor, 2))
 
         super(Generator, self).__init__()
         self.block1 = nn.Sequential(
-            nn.Conv2d(3, 64, kernel_size=9, padding=4), nn.PReLU()
+            nn.Conv2d(in_channels, 64, kernel_size=9, padding=4), nn.PReLU()
         )
         self.block2 = ResidualBlock(64)
         self.block3 = ResidualBlock(64)
@@ -23,7 +24,7 @@ class Generator(nn.Module):
             nn.Conv2d(64, 64, kernel_size=3, padding=1), nn.BatchNorm2d(64)
         )
         block8 = [UpsampleBLock(64, 2) for _ in range(upsample_block_num)]
-        block8.append(nn.Conv2d(64, 3, kernel_size=9, padding=4))
+        block8.append(nn.Conv2d(64, in_channels, kernel_size=9, padding=4))
         self.block8 = nn.Sequential(*block8)
 
     def forward(self, x):
@@ -36,14 +37,14 @@ class Generator(nn.Module):
         block7 = self.block7(block6)
         block8 = self.block8(block1 + block7)
 
-        return (F.tanh(block8) + 1) / 2
+        return (torch.tanh(block8) + 1) / 2
 
 
 class Discriminator(nn.Module):
-    def __init__(self):
+    def __init__(self, *, in_channels):
         super(Discriminator, self).__init__()
         self.net = nn.Sequential(
-            nn.Conv2d(3, 64, kernel_size=3, padding=1),
+            nn.Conv2d(in_channels, 64, kernel_size=3, padding=1),
             nn.LeakyReLU(0.2),
             nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(64),
@@ -74,7 +75,7 @@ class Discriminator(nn.Module):
 
     def forward(self, x):
         batch_size = x.size(0)
-        return F.sigmoid(self.net(x).view(batch_size))
+        return torch.sigmoid(self.net(x).view(batch_size))
 
 
 class ResidualBlock(nn.Module):
@@ -160,3 +161,34 @@ class TVLoss(nn.Module):
     @staticmethod
     def tensor_size(t):
         return t.size()[1] * t.size()[2] * t.size()[3]
+
+
+def test_gray():
+    img = Image.open(
+        "/home/maksim/data/ILSVRC2017_CLS-LOC/ILSVRC/Data/CLS-LOC/val/ILSVRC2012_val_00050000.JPEG"
+    ).convert("L")
+    img_tensor = ToTensor()(img).unsqueeze(0)
+    two_x = Compose([
+        Resize((2 * img_tensor.shape[2], 2 * img_tensor.shape[3]), interpolation=Image.BICUBIC),
+        ToTensor()
+    ])(img).unsqueeze(0)
+
+    g = Generator(scale_factor=2, in_channels=1)
+    d = Discriminator(in_channels=1)
+    g_loss = GeneratorLoss()
+
+    fake_img = g(img_tensor)
+    real_out = d(img_tensor).mean()
+    fake_out = d(fake_img).mean()
+    loss = g_loss(
+        fake_out,
+        torch.cat([fake_img, fake_img, fake_img], dim=1),
+        torch.cat([two_x, two_x, two_x], dim=1))
+
+    print(fake_img, fake_out, real_out, loss)
+
+
+
+
+if __name__ == "__main__":
+    test_gray()
