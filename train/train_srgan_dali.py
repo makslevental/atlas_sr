@@ -99,7 +99,7 @@ upscale_factor = 2
 epochs = 100
 batch_size = 4
 total_batch_size = world_size * batch_size
-prof = False
+prof = True
 static_loss_scale = 1.0
 dynamic_loss_scale = False
 # lr = 0.1
@@ -223,7 +223,12 @@ def train(epoch):
         real_out = netD(hr_image).mean()
         fake_out = netD(fake_img).mean()
         d_loss = 1 - real_out + fake_out
-        d_losses.update(d_loss.item(), batch_size)
+        if distributed:
+            d_reduced_loss = reduce_tensor(d_loss.data)
+        else:
+            d_reduced_loss = d_loss.data
+        d_losses.update(d_reduced_loss.item(), batch_size)
+
 
         optimizerD.zero_grad()
         if fp16:
@@ -241,7 +246,11 @@ def train(epoch):
             torch.cat([fake_img, fake_img, fake_img], dim=1),
             torch.cat([hr_image, hr_image, hr_image], dim=1),
         )
-        g_losses.update(g_loss.item(), batch_size)
+        if distributed:
+            g_reduced_loss = reduce_tensor(g_loss.data)
+        else:
+            g_reduced_loss = g_loss.data
+        g_losses.update(g_reduced_loss.item(), batch_size)
 
         # compute gradient and do SGD step
         optimizerG.zero_grad()
