@@ -11,3 +11,4 @@ pymongo
 mxnet
 pip-tools
 scipy
+opencv-python
