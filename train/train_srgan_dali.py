@@ -330,7 +330,7 @@ if __name__ == "__main__":
         results["ssim"].append(val_results["ssim"])
         results["g_lr"].append(optimizerG.param_groups[0]["lr"])
         results["d_lr"].append(optimizerD.param_groups[0]["lr"])
-        if epoch != 0:
+        if epoch != 0 and not prof:
             data_frame = pd.DataFrame(
                 data={
                     "MSE": results["mse"],
