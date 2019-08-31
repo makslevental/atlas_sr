@@ -248,9 +248,9 @@ def validate():
         batch_mse = ((sr_image - hr_image) ** 2).data.mean()
         batch_ssim = ssim(sr_image, hr_image)
 
-        if distributed:
-            batch_mse = reduce_tensor(batch_mse.data)
-            batch_ssim = reduce_tensor(batch_ssim.data)
+        # if distributed:
+        #     batch_mse = reduce_tensor(batch_mse.data)
+        #     batch_ssim = reduce_tensor(batch_ssim.data)
 
         valing_results["mse"] += batch_mse.item() * batch_size
         valing_results["ssims"] += batch_ssim.item() * batch_size
@@ -316,31 +316,32 @@ if __name__ == "__main__":
     results = {"mse": [], "psnr": [], "ssim": [], "g_lr": [], "d_lr": [], "epoch_time": []}
     for epoch in range(epochs):
         avg_batch_time = train(epoch)
-        val_results = validate()
-        epoch_time.update(time.time() - end)
-        end = time.time()
+        if local_rank == 0:
+            val_results = validate()
+            epoch_time.update(time.time() - end)
+            end = time.time()
 
-        torch.save(
-            netG.state_dict(),
-            f"{checkpoint_dir}/netG_epoch_{upscale_factor}_{epoch}.pth",
-        )
-        torch.save(
-            netD.state_dict(),
-            f"{checkpoint_dir}/netD_epoch_{upscale_factor}_{epoch}.pth",
-        )
-        results["psnr"].append(val_results["psnr"])
-        results["ssim"].append(val_results["ssim"])
-        results["mse"].append(val_results["mse"])
-        results["g_lr"].append(optimizerG.param_groups[0]["lr"])
-        results["d_lr"].append(optimizerD.param_groups[0]["lr"])
-        results["epoch_time"].append(epoch_time.val)
-        if epoch != 0 and not prof:
-            data_frame = pd.DataFrame(
-                data=results
+            torch.save(
+                netG.state_dict(),
+                f"{checkpoint_dir}/netG_epoch_{upscale_factor}_{epoch}.pth",
             )
-            data_frame.to_csv(
-                os.path.join(checkpoint_dir, "metrics.csv"), index_label="Epoch"
+            torch.save(
+                netD.state_dict(),
+                f"{checkpoint_dir}/netD_epoch_{upscale_factor}_{epoch}.pth",
             )
+            results["psnr"].append(val_results["psnr"])
+            results["ssim"].append(val_results["ssim"])
+            results["mse"].append(val_results["mse"])
+            results["g_lr"].append(optimizerG.param_groups[0]["lr"])
+            results["d_lr"].append(optimizerD.param_groups[0]["lr"])
+            results["epoch_time"].append(epoch_time.val)
+            if epoch != 0 and not prof:
+                data_frame = pd.DataFrame(
+                    data=results
+                )
+                data_frame.to_csv(
+                    os.path.join(checkpoint_dir, "metrics.csv"), index_label="Epoch"
+                )
 
-        train_loader.reset()
         val_loader.reset()
+        train_loader.reset()
