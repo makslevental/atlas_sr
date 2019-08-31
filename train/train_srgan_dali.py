@@ -177,6 +177,8 @@ def train(epoch):
         batch_size = lr_image.shape[0]
         train_loader_len = train_loader._size // batch_size
 
+        adjust_learning_rate(epoch, i, train_loader_len)
+
         if prof and i > 10:
             break
 
@@ -248,16 +250,38 @@ def validate():
 
         batch_size = lr_image.size(0)
         valing_results["batch_sizes"] += batch_size
+
         batch_mse = ((sr_image - hr_image) ** 2).data.mean()
         valing_results["mse"] += batch_mse * batch_size
         batch_ssim = ssim(sr_image, hr_image).item()
         valing_results["ssims"] += batch_ssim * batch_size
-        valing_results["psnr"] = 10 * log10(
-            1 / (valing_results["mse"] / valing_results["batch_sizes"])
-        )
-        valing_results["ssim"] = valing_results["ssims"] / valing_results["batch_sizes"]
 
+    valing_results["psnr"] = 10 * log10(
+        1 / (valing_results["mse"] / valing_results["batch_sizes"])
+    )
+    valing_results["ssim"] = valing_results["ssims"] / valing_results["batch_sizes"]
     return valing_results
+
+
+def adjust_learning_rate(epoch, step, len_epoch):
+    factor = epoch // 30
+
+    if epoch >= 80:
+        factor = factor + 1
+
+    lr = args.lr * (0.1 ** factor)
+
+    """Warmup"""
+    if epoch < 5:
+        lr = lr * float(1 + step + epoch * len_epoch) / (5.0 * len_epoch)
+
+    if args.local_rank == 0 and step % args.print_freq == 0 and step > 1:
+        print("Epoch = {}, step = {}, lr = {}".format(epoch, step, lr))
+
+    for param_group in optimizerG.param_groups:
+        param_group["lr"] = lr
+    for param_group in optimizerD.param_groups:
+        param_group["lr"] = lr
 
 
 class AverageMeter(object):
@@ -279,19 +303,20 @@ class AverageMeter(object):
 
 def reduce_tensor(tensor):
     rt = tensor.clone()
-    torch.distributed.all_reduce(rt, op=torch.distributed.reduce_op.SUM)
+    torch.distributed.all_reduce(rt)
     rt /= world_size
     return rt
 
 
 if __name__ == "__main__":
-    total_time = AverageMeter()
-    results = {"psnr": [], "ssim": [], "g_lr": [], "d_lr": []}
+    epoch_time = AverageMeter()
+    end = time.time()
+    results = {"mse": [], "psnr": [], "ssim": [], "g_lr": [], "d_lr": []}
     for epoch in range(epochs):
-        avg_train_time = train(epoch)
-        total_time.update(avg_train_time)
-
+        avg_batch_time = train(epoch)
         val_results = validate()
+        epoch_time.update(time.time() - end)
+        end = time.time()
 
         torch.save(
             netG.state_dict(),
@@ -308,10 +333,12 @@ if __name__ == "__main__":
         if epoch != 0:
             data_frame = pd.DataFrame(
                 data={
+                    "MSE": results["mse"],
                     "PSNR": results["psnr"],
                     "SSIM": results["ssim"],
                     "G_LR": results["g_lr"],
                     "D_LR": results["d_lr"],
+                    "Epoch time": epoch_time.val
                 },
             )
             data_frame.to_csv(
