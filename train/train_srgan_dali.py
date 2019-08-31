@@ -53,7 +53,7 @@ parser.add_argument("--val-mx-path")
 parser.add_argument("--val-mx-index-path")
 parser.add_argument("--checkpoint-dir")
 parser.add_argument("--batch-size")
-parser.add_argument("--prof")
+parser.add_argument("--prof", action="store_true")
 parser.add_argument("--lr")
 parser.add_argument("--crop-size")
 
