@@ -116,9 +116,9 @@ generator_criterion = generator_criterion.cuda()
 if distributed:
     # shared param/delay all reduce turns off bucketing in DDP, for lower latency runs this can improve perf
     # for the older version of APEX please use shared_param, for newer one it is delay_allreduce
-    netG = DDP(netG)
-    netD = DDP(netD)
-    generator_criterion = DDP(generator_criterion)
+    netG = DDP(netG, delay_allreduce=True)
+    netD = DDP(netD, delay_allreduce=True)
+    generator_criterion = DDP(generator_criterion, delay_allreduce=True)
 
 optimizerG = torch.optim.Adam(netG.parameters(), lr=lr)
 optimizerD = torch.optim.Adam(netD.parameters(), lr=lr)
