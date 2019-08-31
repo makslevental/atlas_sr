@@ -86,6 +86,8 @@ if distributed:
             "Please install apex from https://www.github.com/nvidia/apex to run this example."
         )
 
+print(f"distributed: {distributed}")
+
 upscale_factor = 2
 epochs = 100
 batch_size = args.batch_size
