@@ -303,8 +303,8 @@ def test_iter():
         device_id=0,
         crop=88,
         dali_cpu=False,
-        mx_path="/home/maksim/data/voc_train.rec",
-        mx_index_path="/home/maksim/data/voc_train.idx",
+        mx_path="/home/maksim/data/voc_val.rec",
+        mx_index_path="/home/maksim/data/voc_val.idx",
         upscale_factor=2,
     )
     train_pipe.build()
