@@ -165,8 +165,8 @@ def train(epoch):
     for i, (lr_image, hr_image) in enumerate(train_loader):
         batch_size = lr_image.shape[0]
         running_results["batch_sizes"] += batch_size
-        train_loader_len = train_loader.n_steps // batch_size
 
+        # train_loader_len = train_loader.n_steps // batch_size
         # adjust_learning_rate(epoch, i, train_loader_len)
 
         if prof and i > 10:
@@ -208,8 +208,6 @@ def train(epoch):
         running_results["g_loss"] += g_reduced_loss.item() * batch_size
         running_results["d_loss"] += d_reduced_loss.item() * batch_size
 
-    if local_rank == 0:
-        print(running_results)
     return running_results
 
 
@@ -239,10 +237,6 @@ def validate():
         1 / (valing_results["mse"] / valing_results["batch_sizes"])
     )
     valing_results["ssim"] = valing_results["ssims"] / valing_results["batch_sizes"]
-    if local_rank == 0:
-        print(
-            f"Validation\t MSE: {valing_results['mse']}\tPSNR: {valing_results['psnr']}\tSSIM: {valing_results['ssim']}"
-        )
     return valing_results
 
 
@@ -307,7 +301,13 @@ if __name__ == "__main__":
     for epoch in range(epochs):
         running_results = train(epoch)
         if local_rank == 0:
+            print(running_results)
+
+        if local_rank == 0:
             val_results = validate()
+            if local_rank == 0:
+                print(val_results)
+
             epoch_time.update(time.time() - end)
             end = time.time()
 
