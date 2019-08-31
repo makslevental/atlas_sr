@@ -207,7 +207,8 @@ def train(epoch):
         running_results["g_loss"] += g_reduced_loss.item() * batch_size
         running_results["d_loss"] += d_reduced_loss.item() * batch_size
 
-    print(running_results)
+    if local_rank == 0:
+        print(running_results)
     return running_results
 
 
