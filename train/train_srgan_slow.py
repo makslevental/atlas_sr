@@ -134,26 +134,23 @@ def train(netG, netD, optimizerG, optimizerD, generator_loss, train_loader):
     netG.train()
     netD.train()
 
-    running_results = {
-        "batch_sizes": 0,
-        "d_loss": 0,
-        "g_loss": 0,
-    }
+    running_results = {"batch_sizes": 0, "d_loss": 0, "g_loss": 0}
 
-    for data, target in train_loader:
-        batch_size = data.size(0)
+    for lr_image, hr_image in train_loader:
+        batch_size = lr_image.size(0)
         running_results["batch_sizes"] += batch_size
 
         ############################
         # (1) Update D network: maximize D(x)-1-D(G(z))
         ###########################
         if torch.cuda.is_available():
-            target = target.cuda()
-            data = data.cuda()
-        fake_img = netG(data)
+            hr_image = hr_image.cuda()
+            lr_image = lr_image.cuda()
+
+        fake_img = netG(lr_image)
 
         netD.zero_grad()
-        real_out = netD(target).mean()
+        real_out = netD(hr_image).mean()
         fake_out = netD(fake_img).mean()
         d_loss = 1 - real_out + fake_out
         d_loss.backward(retain_graph=True)
@@ -163,21 +160,19 @@ def train(netG, netD, optimizerG, optimizerD, generator_loss, train_loader):
         # (2) Update G network: minimize 1-D(G(z)) + Perception Loss + Image Loss + TV Loss
         ###########################
         netG.zero_grad()
-        g_loss = generator_loss(fake_out, fake_img, target)
+        g_loss = generator_loss(fake_out, fake_img, hr_image)
         g_loss.backward()
         optimizerG.step()
 
         # record stats
-        fake_img = netG(data)
+        fake_img = netG(lr_image)
         fake_out = netD(fake_img).mean()
-        g_loss = generator_loss(fake_out, fake_img, target)
+        g_loss = generator_loss(fake_out, fake_img, hr_image)
         running_results["g_loss"] += g_loss.item() * batch_size
         d_loss = 1 - real_out + fake_out
         running_results["d_loss"] += d_loss.item() * batch_size
 
-        print(
-            running_results
-        )
+        print(running_results)
 
     return running_results
 
@@ -228,18 +223,18 @@ def plot_metrics(metrics_csv_path):
     ax1 = fig.add_subplot(111)
     lns1 = ax1.plot(df.index.values, df["Loss_G"].values, "b-", label="Generator Loss")
     for tl in ax1.get_yticklabels():
-        tl.set_color('b')
+        tl.set_color("b")
     ax1.set_xlabel("Epoch")
 
     ax2 = ax1.twinx()
-    lns2 = ax2.plot(df.index.values, df["PSNR"].values, 'r-', label="PSNR")
+    lns2 = ax2.plot(df.index.values, df["PSNR"].values, "r-", label="PSNR")
     for tl in ax2.get_yticklabels():
-        tl.set_color('r')
+        tl.set_color("r")
 
     ax3 = ax1.twinx()
-    lns3 = ax3.plot(df.index.values, df["SSIM"].values, 'g-', label="SSIM")
+    lns3 = ax3.plot(df.index.values, df["SSIM"].values, "g-", label="SSIM")
     for tl in ax3.get_yticklabels():
-        tl.set_color('g')
+        tl.set_color("g")
 
     lns = lns1 + lns2 + lns3
     labs = [l.get_label() for l in lns]
@@ -248,26 +243,21 @@ def plot_metrics(metrics_csv_path):
 
 
 def main(
-        train_data_dir,
-        val_data_dir,
-        checkpoint_dir,
-        metrics_csv_fp,
-        crop_size=88,
-        upscale_factor=2,
-        num_epochs=100,
+    train_data_dir,
+    val_data_dir,
+    checkpoint_dir,
+    metrics_csv_fp,
+    crop_size=88,
+    upscale_factor=2,
+    num_epochs=100,
 ):
     train_set = TrainDatasetFromFolder(
-        train_data_dir,
-        crop_size=crop_size,
-        upscale_factor=upscale_factor,
+        train_data_dir, crop_size=crop_size, upscale_factor=upscale_factor
     )
     train_loader = DataLoader(
-        dataset=train_set, num_workers=4, batch_size=128, shuffle=True
+        dataset=train_set, num_workers=4, batch_size=64, shuffle=True
     )
-    val_set = ValDatasetFromFolder(
-        val_data_dir,
-        upscale_factor=upscale_factor,
-    )
+    val_set = ValDatasetFromFolder(val_data_dir, upscale_factor=upscale_factor)
     val_loader = DataLoader(dataset=val_set, num_workers=4, batch_size=1, shuffle=False)
 
     netG = nn.DataParallel(Generator(scale_factor=upscale_factor, in_channels=3))
@@ -282,12 +272,7 @@ def main(
     optimizerG = optim.Adam(netG.parameters())
     optimizerD = optim.Adam(netD.parameters())
 
-    results = {
-        "d_loss": [],
-        "g_loss": [],
-        "psnr": [],
-        "ssim": [],
-    }
+    results = {"d_loss": [], "g_loss": [], "psnr": [], "ssim": []}
 
     for epoch in tqdm(range(1, num_epochs + 1), "epoch"):
         running_results = train(
@@ -296,10 +281,12 @@ def main(
         valing_results = validate(netG, val_loader)
         print(valing_results)
         torch.save(
-            netG.state_dict(), f"{checkpoint_dir}/netG_epoch_{upscale_factor}_{epoch}.pth"
+            netG.state_dict(),
+            f"{checkpoint_dir}/netG_epoch_{upscale_factor}_{epoch}.pth",
         )
         torch.save(
-            netD.state_dict(), f"{checkpoint_dir}/netD_epoch_{upscale_factor}_{epoch}.pth"
+            netD.state_dict(),
+            f"{checkpoint_dir}/netD_epoch_{upscale_factor}_{epoch}.pth",
         )
         # save loss\psnr\ssim
         results["d_loss"].append(
@@ -321,10 +308,7 @@ def main(
                 },
                 index=range(1, epoch + 1),
             )
-            data_frame.to_csv(
-                metrics_csv_fp,
-                index_label="Epoch",
-            )
+            data_frame.to_csv(metrics_csv_fp, index_label="Epoch")
 
 
 if __name__ == "__main__":
