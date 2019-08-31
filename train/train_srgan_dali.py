@@ -199,12 +199,13 @@ def train(epoch):
             g_reduced_loss = reduce_tensor(g_loss.data)
         else:
             g_reduced_loss = g_loss.data
-
         g_loss.backward()
         optimizerG.step()
 
         torch.cuda.synchronize(device=torch.cuda.current_device())
         # record stats
+        fake_img = netG(lr_image)
+        fake_out = netD(fake_img).mean()
         g_loss = generator_criterion(fake_out, fake_img, hr_image)
         running_results["g_loss"] += g_loss.item() * batch_size
         d_loss = 1 - real_out + fake_out
