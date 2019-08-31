@@ -140,7 +140,7 @@ def train(netG, netD, optimizerG, optimizerD, generator_loss, train_loader):
         "g_loss": 0,
     }
 
-    for data, target in tqdm(train_loader, "train"):
+    for data, target in train_loader:
         batch_size = data.size(0)
         running_results["batch_sizes"] += batch_size
 
