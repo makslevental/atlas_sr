@@ -4,8 +4,8 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from fastprogress import master_bar
 from torch.optim.lr_scheduler import _LRScheduler
+from tqdm import tqdm
 
 
 class LRFinder(object):
@@ -128,7 +128,7 @@ class LRFinder(object):
 
         # Create an iterator to get data batch by batch
         iterator = iter(train_loader)
-        for iteration in master_bar(range(num_iter)):
+        for iteration in tqdm(range(num_iter)):
             # Get a new set of inputs and labels
             try:
                 inputs, labels = next(iterator)
