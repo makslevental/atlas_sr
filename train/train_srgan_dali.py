@@ -13,10 +13,6 @@ from metrics.ssim import ssim
 from models.SRGAN import Generator, Discriminator, GeneratorLoss
 
 try:
-    from nvidia.dali.plugin.pytorch import (
-        DALIClassificationIterator,
-        DALIGenericIterator,
-    )
     from nvidia.dali.pipeline import Pipeline
     import nvidia.dali.ops as ops
     import nvidia.dali.types as types
@@ -149,7 +145,7 @@ val_pipe = SRGANMXNetPipeline(
     mx_path=val_mx_path,
     mx_index_path=val_mx_index_path,
     upscale_factor=upscale_factor,
-    random_shuffle=False
+    random_shuffle=False,
 )
 val_pipe.build()
 val_loader = StupidDALIIterator(
@@ -164,10 +160,7 @@ def train(epoch):
     netG.train()
     netD.train()
 
-    batch_time = AverageMeter()
-    d_losses = AverageMeter()
-    g_losses = AverageMeter()
-    end = time.time()
+    running_results = {"batch_sizes": 0, "d_loss": 0, "g_loss": 0}
 
     for i, (lr_image, hr_image) in enumerate(train_loader):
         batch_size = lr_image.shape[0]
@@ -191,7 +184,6 @@ def train(epoch):
             d_reduced_loss = reduce_tensor(d_loss.data)
         else:
             d_reduced_loss = d_loss.data
-        d_losses.update(d_reduced_loss.item(), batch_size)
 
         d_loss.backward(retain_graph=True)
         optimizerD.step()
@@ -201,36 +193,21 @@ def train(epoch):
         ###########################
         netG.zero_grad()
 
-        g_loss = generator_criterion(
-            fake_out,
-            fake_img,
-            hr_image
-        )
+        g_loss = generator_criterion(fake_out, fake_img, hr_image)
         if distributed:
             g_reduced_loss = reduce_tensor(g_loss.data)
         else:
             g_reduced_loss = g_loss.data
-        g_losses.update(g_reduced_loss.item(), batch_size)
 
         g_loss.backward()
         optimizerG.step()
 
         torch.cuda.synchronize(device=torch.cuda.current_device())
         # record stats
-        batch_time.update(time.time() - end)
-        end = time.time()
-        speed = total_batch_size / batch_time.val
-        avg_speed = total_batch_size / batch_time.avg
-        if local_rank == 0 and i % print_freq == 0 and i > 1:
-            print(
-                f"Epoch: {epoch}\t"
-                f"Batch: {i}/{train_loader_len}\t"
-                f"Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t"
-                f"Speed {speed:.3f} ({avg_speed:.3f})\t"
-                f"G Loss {g_losses.val:.4f} ({g_losses.avg:.4f})\t"
-                f"D Loss {d_losses.val:.4f} ({d_losses.avg:.4f})\t"
-            )
-    return batch_time.avg
+        running_results["g_loss"] += g_reduced_loss.item() * batch_size
+        running_results["d_loss"] += d_reduced_loss.item() * batch_size
+
+    return running_results
 
 
 def validate():
@@ -261,7 +238,8 @@ def validate():
     valing_results["ssim"] = valing_results["ssims"] / valing_results["batch_sizes"]
     if local_rank == 0:
         print(
-            f"Validation\t MSE: {valing_results['mse']}\tPSNR: {valing_results['psnr']}\tSSIM: {valing_results['ssim']}")
+            f"Validation\t MSE: {valing_results['mse']}\tPSNR: {valing_results['psnr']}\tSSIM: {valing_results['ssim']}"
+        )
     return valing_results
 
 
@@ -313,9 +291,18 @@ def reduce_tensor(tensor):
 if __name__ == "__main__":
     epoch_time = AverageMeter()
     end = time.time()
-    results = {"mse": [], "psnr": [], "ssim": [], "g_lr": [], "d_lr": [], "epoch_time": []}
+    results = {
+        "mse": [],
+        "psnr": [],
+        "ssim": [],
+        "g_lr": [],
+        "d_lr": [],
+        "g_loss": [],
+        "d_loss": [],
+        "epoch_time": [],
+    }
     for epoch in range(epochs):
-        avg_batch_time = train(epoch)
+        running_results = train(epoch)
         if local_rank == 0:
             val_results = validate()
             epoch_time.update(time.time() - end)
@@ -334,11 +321,11 @@ if __name__ == "__main__":
             results["mse"].append(val_results["mse"])
             results["g_lr"].append(optimizerG.param_groups[0]["lr"])
             results["d_lr"].append(optimizerD.param_groups[0]["lr"])
+            results["g_loss"].append(running_results["g_loss"])
+            results["d_loss"].append(running_results["d_loss"])
             results["epoch_time"].append(epoch_time.val)
             if epoch != 0 and not prof:
-                data_frame = pd.DataFrame(
-                    data=results
-                )
+                data_frame = pd.DataFrame(data=results)
                 data_frame.to_csv(
                     os.path.join(checkpoint_dir, "metrics.csv"), index_label="Epoch"
                 )
