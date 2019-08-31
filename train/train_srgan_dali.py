@@ -208,6 +208,13 @@ def train(epoch):
         running_results["g_loss"] += g_reduced_loss.item() * batch_size
         running_results["d_loss"] += d_reduced_loss.item() * batch_size
 
+        if local_rank == 0:
+            print(
+                f"d_loss: {running_results['d_loss'] / running_results['batch_sizes']}\t"
+                f"g_loss: {running_results['g_loss'] / running_results['batch_sizes']}\t"
+            )
+
+
     return running_results
 
 
@@ -300,8 +307,6 @@ if __name__ == "__main__":
     }
     for epoch in range(epochs):
         running_results = train(epoch)
-        if local_rank == 0:
-            print(running_results)
 
         if local_rank == 0:
             val_results = validate()
