@@ -160,14 +160,17 @@ def train(epoch):
     netG.train()
     netD.train()
 
-    running_results = {"batch_sizes": 0, "d_loss": 0, "g_loss": 0}
+    running_results = {
+        "batch_sizes": 0,
+        "d_loss": 0,
+        "g_loss": 0,
+        "d_reduced_loss": 0,
+        "g_reduced_loss": 0,
+    }
 
     for i, (lr_image, hr_image) in enumerate(train_loader):
         batch_size = lr_image.shape[0]
         running_results["batch_sizes"] += batch_size
-
-        # train_loader_len = train_loader.n_steps // batch_size
-        # adjust_learning_rate(epoch, i, train_loader_len)
 
         if prof and i > 10:
             break
@@ -181,11 +184,12 @@ def train(epoch):
         real_out = netD(hr_image).mean()
         fake_out = netD(fake_img).mean()
         d_loss = 1 - real_out + fake_out
+
         if distributed:
             d_reduced_loss = reduce_tensor(d_loss.data)
         else:
             d_reduced_loss = d_loss.data
-
+        running_results["d_reduced_loss"] = d_reduced_loss.item()
         d_loss.backward(retain_graph=True)
         optimizerD.step()
 
@@ -193,16 +197,17 @@ def train(epoch):
         # (2) Update G network: minimize 1-D(G(z)) + Perception Loss + Image Loss + TV Loss
         ###########################
         netG.zero_grad()
-
         g_loss = generator_criterion(fake_out, fake_img, hr_image)
         if distributed:
             g_reduced_loss = reduce_tensor(g_loss.data)
         else:
             g_reduced_loss = g_loss.data
+        running_results["g_reduced_loss"] = g_reduced_loss.item()
         g_loss.backward()
         optimizerG.step()
 
-        torch.cuda.synchronize(device=torch.cuda.current_device())
+        torch.cuda.synchronize()
+
         # record stats
         fake_img = netG(lr_image)
         fake_out = netD(fake_img).mean()
@@ -212,10 +217,7 @@ def train(epoch):
         running_results["d_loss"] += d_loss.item() * batch_size
 
         if local_rank == 0:
-            print(
-                running_results
-            )
-
+            print(running_results)
 
     return running_results
 
