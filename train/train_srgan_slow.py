@@ -288,7 +288,7 @@ def main(
             netG, netD, optimizerG, optimizerD, generator_criterion, train_loader
         )
         valing_results = validate(netG, val_loader)
-
+        print(valing_results)
         torch.save(
             netG.state_dict(), f"{checkpoint_dir}/netG_epoch_{upscale_factor}_{epoch}.pth"
         )

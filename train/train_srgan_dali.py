@@ -149,6 +149,7 @@ val_pipe = SRGANMXNetPipeline(
     mx_path=val_mx_path,
     mx_index_path=val_mx_index_path,
     upscale_factor=upscale_factor,
+    random_shuffle=False
 )
 val_pipe.build()
 val_loader = StupidDALIIterator(
@@ -239,15 +240,20 @@ def validate():
         if prof and i > 10:
             break
 
-        sr_image = netG(lr_image)
-
         batch_size = lr_image.shape[0]
         valing_results["batch_sizes"] += batch_size
+        with torch.no_grad():
+            sr_image = netG(lr_image)
 
         batch_mse = ((sr_image - hr_image) ** 2).data.mean()
-        valing_results["mse"] += batch_mse * batch_size
-        batch_ssim = ssim(sr_image, hr_image).item()
-        valing_results["ssims"] += batch_ssim * batch_size
+        batch_ssim = ssim(sr_image, hr_image)
+
+        if distributed:
+            batch_mse = reduce_tensor(batch_mse.data)
+            batch_ssim = reduce_tensor(batch_ssim.data)
+
+        valing_results["mse"] += batch_mse.item() * batch_size
+        valing_results["ssims"] += batch_ssim.item() * batch_size
 
     valing_results["psnr"] = 10 * log10(
         1 / (valing_results["mse"] / valing_results["batch_sizes"])
