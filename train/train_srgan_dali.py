@@ -321,8 +321,12 @@ if __name__ == "__main__":
             results["mse"].append(val_results["mse"])
             results["g_lr"].append(optimizerG.param_groups[0]["lr"])
             results["d_lr"].append(optimizerD.param_groups[0]["lr"])
-            results["g_loss"].append(running_results["g_loss"])
-            results["d_loss"].append(running_results["d_loss"])
+            results["d_loss"].append(
+                running_results["d_loss"] / running_results["batch_sizes"]
+            )
+            results["g_loss"].append(
+                running_results["g_loss"] / running_results["batch_sizes"]
+            )
             results["epoch_time"].append(epoch_time.val)
             if epoch != 0 and not prof:
                 data_frame = pd.DataFrame(data=results)
