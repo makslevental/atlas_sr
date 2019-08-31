@@ -104,8 +104,8 @@ resume = False
 dali_cpu = False
 print_freq = 10
 
-netG = Generator(scale_factor=upscale_factor, in_channels=1)
-netD = Discriminator(in_channels=1)
+netG = Generator(scale_factor=upscale_factor, in_channels=3)
+netD = Discriminator(in_channels=3)
 generator_criterion = GeneratorLoss()
 
 netG = netG.cuda()
@@ -202,8 +202,8 @@ def train(epoch):
 
         g_loss = generator_criterion(
             fake_out,
-            torch.cat([fake_img, fake_img, fake_img], dim=1),
-            torch.cat([hr_image, hr_image, hr_image], dim=1),
+            fake_img,
+            hr_image
         )
         if distributed:
             g_reduced_loss = reduce_tensor(g_loss.data)
@@ -254,7 +254,8 @@ def validate():
     )
     valing_results["ssim"] = valing_results["ssims"] / valing_results["batch_sizes"]
     if local_rank == 0:
-        print(f"Validation\t MSE: {valing_results['mse']}\tPSNR: {valing_results['psnr']}\tSSIM: {valing_results['ssim']}")
+        print(
+            f"Validation\t MSE: {valing_results['mse']}\tPSNR: {valing_results['psnr']}\tSSIM: {valing_results['ssim']}")
     return valing_results
 
 

@@ -3,6 +3,7 @@ import os
 
 import nvidia.dali.ops as ops
 import nvidia.dali.types as types
+import torch
 from PIL import Image
 from matplotlib import gridspec, pyplot as plt
 from nvidia.dali.pipeline import Pipeline
@@ -89,6 +90,8 @@ class StupidDALIIterator:
     def __next__(self):
         n = next(self.dali_iter)
         lr_image, hr_image = n[0]["lr_image"], n[0]["hr_image"]
+        hr_image = hr_image.to(torch.float)
+        lr_image = lr_image.to(torch.float)
         hr_image = hr_image.permute(0, 3, 1, 2)
         lr_image = lr_image.permute(0, 3, 1, 2)
         return lr_image, hr_image
@@ -116,7 +119,7 @@ class SRGANPipeline(Pipeline):
         host_memory_padding = 140544512 if decoder_device == "mixed" else 0
         self.decode = ops.ImageDecoderCrop(
             device=decoder_device,
-            output_type=types.DALIImageType.GRAY,
+            output_type=types.DALIImageType.RGB,
             device_memory_padding=device_memory_padding,
             host_memory_padding=host_memory_padding,
             crop=crop,
@@ -140,8 +143,8 @@ class SRGANPipeline(Pipeline):
         )
         lr_images = self.res(hr_images)
 
-        hr_images = self.cast(hr_images)
-        lr_images = self.cast(lr_images)
+        # hr_images = self.cast(hr_images)
+        # lr_images = self.cast(lr_images)
 
         return [lr_images, hr_images]
 
@@ -256,7 +259,7 @@ def show_images(image_batch, batch_size):
         img = image_batch.at(j)
         print(img.dtype)
         # img = np.transpose(img, (1, 2, 0))
-        img = img.squeeze(2)
+        # img = img.squeeze(2)
         plt.subplot(gs[j])
         plt.axis("off")
         plt.imshow(img, cmap="gray")
