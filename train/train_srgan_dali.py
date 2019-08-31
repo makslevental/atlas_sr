@@ -164,9 +164,10 @@ def train(epoch):
 
     for i, (lr_image, hr_image) in enumerate(train_loader):
         batch_size = lr_image.shape[0]
+        running_results["batch_sizes"] += batch_size
         train_loader_len = train_loader.n_steps // batch_size
 
-        adjust_learning_rate(epoch, i, train_loader_len)
+        # adjust_learning_rate(epoch, i, train_loader_len)
 
         if prof and i > 10:
             break
