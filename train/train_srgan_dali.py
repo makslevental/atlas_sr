@@ -253,7 +253,8 @@ def validate():
         1 / (valing_results["mse"] / valing_results["batch_sizes"])
     )
     valing_results["ssim"] = valing_results["ssims"] / valing_results["batch_sizes"]
-    print(f"Validation\t MSE: {valing_results['mse']}\tPSNR: {valing_results['psnr']}\tSSIM: {valing_results['ssim']}")
+    if local_rank == 0:
+        print(f"Validation\t MSE: {valing_results['mse']}\tPSNR: {valing_results['psnr']}\tSSIM: {valing_results['ssim']}")
     return valing_results
 
 
