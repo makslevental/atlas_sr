@@ -8,7 +8,7 @@ import torch
 import torch.backends.cudnn
 import torch.distributed
 
-from data_utils.dali import SRGANMXNetPipeline
+from data_utils.dali import SRGANMXNetPipeline, StupidDALIIterator
 from metrics.ssim import ssim
 from models.SRGAN import Generator, Discriminator, GeneratorLoss
 
@@ -27,8 +27,6 @@ except ImportError:
 
 
 class AverageMeter(object):
-    """Computes and stores the average and current value"""
-
     def __init__(self):
         self.reset()
 
@@ -47,15 +45,15 @@ class AverageMeter(object):
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--local_rank", default=0, type=int)
-parser.add_argument("--train-mx-path")
-parser.add_argument("--train-mx-index-path")
-parser.add_argument("--val-mx-path")
-parser.add_argument("--val-mx-index-path")
-parser.add_argument("--checkpoint-dir")
-parser.add_argument("--batch-size", type=int)
+parser.add_argument("--train-mx-path", default="/home/maksim/data/voc_train.rec")
+parser.add_argument("--train-mx-index-path", default="/home/maksim/data/voc_train.idx")
+parser.add_argument("--val-mx-path", default="/home/maksim/data/voc_val.rec")
+parser.add_argument("--val-mx-index-path", default="/home/maksim/data/voc_val.idx")
+parser.add_argument("--checkpoint-dir", default="/tmp")
+parser.add_argument("--batch-size", type=int, default=16)
 parser.add_argument("--prof", action="store_true", default=False)
-parser.add_argument("--lr", type=float)
-parser.add_argument("--crop-size", type=int)
+parser.add_argument("--lr", type=float, default=1e-4)
+parser.add_argument("--crop-size", type=int, default=88)
 
 args = parser.parse_args()
 local_rank = args.local_rank
@@ -101,7 +99,7 @@ prof = args.prof
 static_loss_scale = 1.0
 dynamic_loss_scale = False
 lr = args.lr
-workers = 4
+workers = 1
 resume = False
 dali_cpu = False
 print_freq = 10
@@ -135,7 +133,7 @@ train_pipe = SRGANMXNetPipeline(
     upscale_factor=upscale_factor,
 )
 train_pipe.build()
-train_loader = DALIGenericIterator(
+train_loader = StupidDALIIterator(
     pipelines=[train_pipe],
     output_map=["lr_image", "hr_image"],
     size=int(train_pipe.epoch_size("Reader") / world_size),
@@ -153,7 +151,7 @@ val_pipe = SRGANMXNetPipeline(
     upscale_factor=upscale_factor,
 )
 val_pipe.build()
-val_loader = DALIGenericIterator(
+val_loader = StupidDALIIterator(
     pipelines=[val_pipe],
     output_map=["lr_image", "hr_image"],
     size=int(val_pipe.epoch_size("Reader") / world_size),
@@ -170,12 +168,9 @@ def train(epoch):
     g_losses = AverageMeter()
     end = time.time()
 
-    for i, data in enumerate(train_loader):
-        lr_image = data[0]["lr_image"]
-        hr_image = data[0]["hr_image"]
-
+    for i, (lr_image, hr_image) in enumerate(train_loader):
         batch_size = lr_image.shape[0]
-        train_loader_len = train_loader._size // batch_size
+        train_loader_len = train_loader.n_steps // batch_size
 
         adjust_learning_rate(epoch, i, train_loader_len)
 
@@ -240,15 +235,13 @@ def train(epoch):
 def validate():
     netG.eval()
     valing_results = {"mse": 0, "ssims": 0, "psnr": 0, "ssim": 0, "batch_sizes": 0}
-    for i, data in enumerate(val_loader):
+    for i, (lr_image, hr_image) in enumerate(val_loader):
         if prof and i > 10:
             break
 
-        lr_image = data[0]["lr_image"]
-        hr_image = data[0]["hr_image"]
         sr_image = netG(lr_image)
 
-        batch_size = lr_image.size(0)
+        batch_size = lr_image.shape[0]
         valing_results["batch_sizes"] += batch_size
 
         batch_mse = ((sr_image - hr_image) ** 2).data.mean()
@@ -260,6 +253,7 @@ def validate():
         1 / (valing_results["mse"] / valing_results["batch_sizes"])
     )
     valing_results["ssim"] = valing_results["ssims"] / valing_results["batch_sizes"]
+    print(f"Validation\t MSE: {valing_results['mse']}\tPSNR: {valing_results['psnr']}\tSSIM: {valing_results['ssim']}")
     return valing_results
 
 
@@ -338,8 +332,8 @@ if __name__ == "__main__":
                     "SSIM": results["ssim"],
                     "G_LR": results["g_lr"],
                     "D_LR": results["d_lr"],
-                    "Epoch time": epoch_time.val
-                },
+                    "Epoch time": epoch_time.val,
+                }
             )
             data_frame.to_csv(
                 os.path.join(checkpoint_dir, "metrics.csv"), index_label="Epoch"
