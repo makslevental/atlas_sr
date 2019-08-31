@@ -305,7 +305,7 @@ def reduce_tensor(tensor):
 if __name__ == "__main__":
     epoch_time = AverageMeter()
     end = time.time()
-    results = {"mse": [], "psnr": [], "ssim": [], "g_lr": [], "d_lr": []}
+    results = {"mse": [], "psnr": [], "ssim": [], "g_lr": [], "d_lr": [], "epoch_time": []}
     for epoch in range(epochs):
         avg_batch_time = train(epoch)
         val_results = validate()
@@ -322,18 +322,13 @@ if __name__ == "__main__":
         )
         results["psnr"].append(val_results["psnr"])
         results["ssim"].append(val_results["ssim"])
+        results["mse"].append(val_results["mse"])
         results["g_lr"].append(optimizerG.param_groups[0]["lr"])
         results["d_lr"].append(optimizerD.param_groups[0]["lr"])
+        results["epoch_time"].append(epoch_time.val)
         if epoch != 0 and not prof:
             data_frame = pd.DataFrame(
-                data={
-                    "MSE": results["mse"],
-                    "PSNR": results["psnr"],
-                    "SSIM": results["ssim"],
-                    "G_LR": results["g_lr"],
-                    "D_LR": results["d_lr"],
-                    "Epoch time": epoch_time.val,
-                }
+                data=results
             )
             data_frame.to_csv(
                 os.path.join(checkpoint_dir, "metrics.csv"), index_label="Epoch"
