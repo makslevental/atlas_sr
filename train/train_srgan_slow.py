@@ -166,9 +166,10 @@ def train(netG, netD, optimizerG, optimizerD, generator_loss, train_loader):
         g_loss = generator_loss(fake_out, fake_img, target)
         g_loss.backward()
         optimizerG.step()
+
+        # record stats
         fake_img = netG(data)
         fake_out = netD(fake_img).mean()
-
         g_loss = generator_loss(fake_out, fake_img, target)
         running_results["g_loss"] += g_loss.item() * batch_size
         d_loss = 1 - real_out + fake_out
