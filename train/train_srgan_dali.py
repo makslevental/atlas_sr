@@ -205,8 +205,10 @@ def train(epoch):
 
         torch.cuda.synchronize(device=torch.cuda.current_device())
         # record stats
-        running_results["g_loss"] += g_reduced_loss.item() * batch_size
-        running_results["d_loss"] += d_reduced_loss.item() * batch_size
+        g_loss = generator_criterion(fake_out, fake_img, hr_image)
+        running_results["g_loss"] += g_loss.item() * batch_size
+        d_loss = 1 - real_out + fake_out
+        running_results["d_loss"] += d_loss.item() * batch_size
 
         if local_rank == 0:
             print(
