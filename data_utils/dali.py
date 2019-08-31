@@ -162,6 +162,7 @@ class SRGANMXNetPipeline(SRGANPipeline):
             mx_path,
             mx_index_path,
             dali_cpu=False,
+            random_shuffle=True
     ):
         super(SRGANMXNetPipeline, self).__init__(
             batch_size, num_threads, device_id, crop, upscale_factor, dali_cpu
@@ -169,7 +170,7 @@ class SRGANMXNetPipeline(SRGANPipeline):
         self.input = ops.MXNetReader(
             path=[mx_path],
             index_path=[mx_index_path],
-            random_shuffle=True,
+            random_shuffle=random_shuffle,
             shard_id=device_id,
             num_shards=num_gpus,
         )
