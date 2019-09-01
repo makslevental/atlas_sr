@@ -129,9 +129,9 @@ train_loader = StupidDALIIterator(
 )
 val_pipe = SRGANMXNetPipeline(
     batch_size=batch_size,
-    num_gpus=world_size,
+    num_gpus=1,
     num_threads=workers,
-    device_id=local_rank,
+    device_id=0,
     crop=crop_size,
     dali_cpu=False,
     mx_path=val_mx_path,
