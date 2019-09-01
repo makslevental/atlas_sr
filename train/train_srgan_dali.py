@@ -8,9 +8,11 @@ import torch
 import torch.backends.cudnn
 import torch.distributed
 
-from data_utils.dali import SRGANMXNetPipeline, StupidDALIIterator
+from data_utils.dali import StupidDALIIterator, SRGANMXNetPipeline
+from metrics.metrics import AverageMeter
 from metrics.ssim import ssim
 from models.SRGAN import Generator, Discriminator, GeneratorLoss
+from util.util import reduce_tensor
 
 try:
     from nvidia.dali.pipeline import Pipeline
@@ -20,24 +22,6 @@ except ImportError:
     raise ImportError(
         "Please install DALI from https://www.github.com/NVIDIA/DALI to run this example."
     )
-
-
-class AverageMeter(object):
-    def __init__(self):
-        self.reset()
-
-    def reset(self):
-        self.val = 0
-        self.avg = 0
-        self.sum = 0
-        self.count = 0
-
-    def update(self, val, n=1):
-        self.val = val
-        self.sum += val * n
-        self.count += n
-        self.avg = self.sum / self.count
-
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--local_rank", default=0, type=int)
@@ -86,8 +70,6 @@ if distributed:
             "Please install apex from https://www.github.com/nvidia/apex to run this example."
         )
 
-print(f"distributed: {distributed}")
-
 upscale_factor = 2
 epochs = 100
 batch_size = args.batch_size
@@ -102,22 +84,30 @@ resume = False
 dali_cpu = False
 print_freq = 10
 
-netG = Generator(scale_factor=upscale_factor, in_channels=3)
-netD = Discriminator(in_channels=3)
-generator_criterion = GeneratorLoss()
-
+netG = Generator(scale_factor=upscale_factor, in_channels=1)
+netD = Discriminator(in_channels=1)
 netG = netG.cuda()
 netD = netD.cuda()
-generator_criterion = generator_criterion.cuda()
+
+# because vgg excepts 3 channels
+generator_criterion_3 = GeneratorLoss()
+generator_criterion_3 = generator_criterion_3.cuda()
 if distributed:
     # shared param/delay all reduce turns off bucketing in DDP, for lower latency runs this can improve perf
     # for the older version of APEX please use shared_param, for newer one it is delay_allreduce
     netG = DDP(netG, delay_allreduce=True)
     netD = DDP(netD, delay_allreduce=True)
-    generator_criterion = DDP(generator_criterion, delay_allreduce=True)
+    generator_criterion_3 = DDP(generator_criterion_3, delay_allreduce=True)
 
-optimizerG = torch.optim.Adam(netG.parameters(), lr=lr)
-optimizerD = torch.optim.Adam(netD.parameters(), lr=lr)
+# because vgg excepts 3 channels
+generator_criterion = lambda fake_out, fake_img, hr_image: generator_criterion_3(
+    fake_out,
+    torch.cat([fake_img, fake_img, fake_img], dim=1),
+    torch.cat([hr_image, hr_image, hr_image], dim=1),
+)
+
+optimizerG = torch.optim.Adam(netG.parameters())
+optimizerD = torch.optim.Adam(netD.parameters())
 
 train_pipe = SRGANMXNetPipeline(
     batch_size=batch_size,
@@ -154,7 +144,6 @@ val_loader = StupidDALIIterator(
     pipelines=[val_pipe],
     output_map=["lr_image", "hr_image"],
     size=int(val_pipe.epoch_size("Reader") / world_size),
-    auto_reset=False,
 )
 
 
@@ -164,15 +153,16 @@ def train(epoch):
 
     running_results = {
         "batch_sizes": 0,
-        "d_loss": 0,
-        "g_loss": 0,
         "d_reduced_loss": 0,
         "g_reduced_loss": 0,
+        "step": ""
     }
 
     for i, (lr_image, hr_image) in enumerate(train_loader):
         batch_size = lr_image.shape[0]
         running_results["batch_sizes"] += batch_size
+        running_results["step"] = f"{i+1}/{train_loader.size//batch_size}"
+        adjust_learning_rate(epoch, i, train_loader.size)
 
         if prof and i > 10:
             break
@@ -188,10 +178,10 @@ def train(epoch):
         d_loss = 1 - real_out + fake_out
 
         if distributed:
-            d_reduced_loss = reduce_tensor(d_loss.data)
+            d_reduced_loss = reduce_tensor(d_loss, world_size)
         else:
-            d_reduced_loss = d_loss.data
-        running_results["d_reduced_loss"] = d_reduced_loss.item()
+            d_reduced_loss = d_loss
+        running_results["d_reduced_loss"] += d_reduced_loss.item() * batch_size
         d_loss.backward(retain_graph=True)
         optimizerD.step()
 
@@ -201,22 +191,14 @@ def train(epoch):
         netG.zero_grad()
         g_loss = generator_criterion(fake_out, fake_img, hr_image)
         if distributed:
-            g_reduced_loss = reduce_tensor(g_loss.data)
+            g_reduced_loss = reduce_tensor(g_loss, world_size)
         else:
-            g_reduced_loss = g_loss.data
-        running_results["g_reduced_loss"] = g_reduced_loss.item()
+            g_reduced_loss = g_loss
+        running_results["g_reduced_loss"] += g_reduced_loss.item() * batch_size
         g_loss.backward()
         optimizerG.step()
 
-        torch.cuda.synchronize()
-
-        # record stats
-        fake_img = netG(lr_image)
-        fake_out = netD(fake_img).mean()
-        g_loss = generator_criterion(fake_out, fake_img, hr_image)
-        running_results["g_loss"] += g_loss.item() * batch_size
-        d_loss = 1 - real_out + fake_out
-        running_results["d_loss"] += d_loss.item() * batch_size
+        torch.cuda.synchronize(device=torch.cuda.current_device())
 
         if local_rank == 0:
             print(running_results)
@@ -236,12 +218,8 @@ def validate():
         with torch.no_grad():
             sr_image = netG(lr_image)
 
-        batch_mse = ((sr_image - hr_image) ** 2).data.mean()
+        batch_mse = ((sr_image - hr_image) ** 2).mean()
         batch_ssim = ssim(sr_image, hr_image)
-
-        # if distributed:
-        #     batch_mse = reduce_tensor(batch_mse.data)
-        #     batch_ssim = reduce_tensor(batch_ssim.data)
 
         valing_results["mse"] += batch_mse.item() * batch_size
         valing_results["ssims"] += batch_ssim.item() * batch_size
@@ -274,32 +252,8 @@ def adjust_learning_rate(epoch, step, len_epoch):
         param_group["lr"] = lr
 
 
-class AverageMeter(object):
-    def __init__(self):
-        self.reset()
-
-    def reset(self):
-        self.val = 0
-        self.avg = 0
-        self.sum = 0
-        self.count = 0
-
-    def update(self, val, n=1):
-        self.val = val
-        self.sum += val * n
-        self.count += n
-        self.avg = self.sum / self.count
-
-
-def reduce_tensor(tensor):
-    rt = tensor.clone()
-    torch.distributed.all_reduce(rt)
-    rt /= world_size
-    return rt
-
-
-if __name__ == "__main__":
-    epoch_time = AverageMeter()
+def main():
+    epoch_time = AverageMeter("epoch")
     end = time.time()
     results = {
         "mse": [],
@@ -316,8 +270,7 @@ if __name__ == "__main__":
 
         if local_rank == 0:
             val_results = validate()
-            if local_rank == 0:
-                print(val_results)
+            print(val_results)
 
             epoch_time.update(time.time() - end)
             end = time.time()
@@ -335,11 +288,11 @@ if __name__ == "__main__":
             results["mse"].append(val_results["mse"])
             results["g_lr"].append(optimizerG.param_groups[0]["lr"])
             results["d_lr"].append(optimizerD.param_groups[0]["lr"])
-            results["d_loss"].append(
-                running_results["d_loss"] / running_results["batch_sizes"]
+            results["d_reduced_loss"].append(
+                running_results["d_reduced_loss"] / running_results["batch_sizes"]
             )
-            results["g_loss"].append(
-                running_results["g_loss"] / running_results["batch_sizes"]
+            results["g_reduced_loss"].append(
+                running_results["g_reduced_loss"] / running_results["batch_sizes"]
             )
             results["epoch_time"].append(epoch_time.val)
             if epoch != 0 and not prof:
@@ -350,3 +303,7 @@ if __name__ == "__main__":
 
         val_loader.reset()
         train_loader.reset()
+
+
+if __name__ == "__main__":
+    main()

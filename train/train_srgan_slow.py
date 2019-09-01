@@ -6,18 +6,12 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import torch.optim as optim
 import torch.utils.data
+import torchvision.transforms.functional
 from PIL import Image
 from torch import nn
 from torch.utils.data import DataLoader
 from torch.utils.data.dataset import Dataset
-from torchvision.transforms import (
-    Compose,
-    RandomCrop,
-    ToTensor,
-    ToPILImage,
-    CenterCrop,
-    Resize,
-)
+from torchvision.transforms import Compose, ToTensor, ToPILImage, CenterCrop, Resize, RandomCrop
 from tqdm import tqdm
 
 from metrics.ssim import ssim
@@ -37,6 +31,14 @@ def calculate_valid_crop_size(crop_size, upscale_factor):
 
 def train_hr_transform(crop_size):
     return Compose([RandomCrop(crop_size), ToTensor()])
+    # return Compose(
+    #     [
+    #         lambda img: torchvision.transforms.functional.crop(
+    #             img, 0, 0, crop_size, crop_size
+    #         ),
+    #         ToTensor(),
+    #     ]
+    # )
 
 
 def train_lr_transform(crop_size, upscale_factor):
@@ -59,12 +61,14 @@ class TrainDatasetFromFolder(Dataset):
         self.image_filenames = [
             join(dataset_dir, x) for x in listdir(dataset_dir) if is_image_file(x)
         ]
+        self.image_filenames.sort()
         crop_size = calculate_valid_crop_size(crop_size, upscale_factor)
         self.hr_transform = train_hr_transform(crop_size)
         self.lr_transform = train_lr_transform(crop_size, upscale_factor)
 
     def __getitem__(self, index):
-        hr_image = self.hr_transform(Image.open(self.image_filenames[index]))
+        img = Image.open(self.image_filenames[index])
+        hr_image = self.hr_transform(img)
         lr_image = self.lr_transform(hr_image)
         return lr_image, hr_image
 
@@ -255,7 +259,7 @@ def main(
         train_data_dir, crop_size=crop_size, upscale_factor=upscale_factor
     )
     train_loader = DataLoader(
-        dataset=train_set, num_workers=4, batch_size=64, shuffle=True
+        dataset=train_set, num_workers=4, batch_size=16, shuffle=False
     )
     val_set = ValDatasetFromFolder(val_data_dir, upscale_factor=upscale_factor)
     val_loader = DataLoader(dataset=val_set, num_workers=4, batch_size=1, shuffle=False)
@@ -274,7 +278,7 @@ def main(
 
     results = {"d_loss": [], "g_loss": [], "psnr": [], "ssim": []}
 
-    for epoch in tqdm(range(1, num_epochs + 1), "epoch"):
+    for epoch in range(1, num_epochs + 1):
         running_results = train(
             netG, netD, optimizerG, optimizerD, generator_criterion, train_loader
         )
@@ -313,9 +317,9 @@ def main(
 
 if __name__ == "__main__":
     main(
-        upscale_factor=4,
+        upscale_factor=2,
         train_data_dir="/home/maksim/data/VOC2012/train",
         val_data_dir="/home/maksim/data/VOC2012/val",
-        checkpoint_dir="/home/maksim/dev_projects/atlas_sr/checkpoints/srgan",
-        metrics_csv_fp="/home/maksim/dev_projects/atlas_sr/checkpoints/srgan/metrics.csv",
+        checkpoint_dir="/tmp",
+        metrics_csv_fp="/tmp/metrics.csv",
     )

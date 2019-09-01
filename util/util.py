@@ -212,3 +212,10 @@ def load_model_state(
         opt.load_state_dict(state["optimizer"])
     del state
     gc.collect()
+
+
+def reduce_tensor(tensor, world_size):
+    rt = tensor.clone()
+    torch.distributed.all_reduce(rt)
+    rt /= world_size
+    return rt
