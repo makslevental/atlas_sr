@@ -153,15 +153,15 @@ def train(epoch):
 
     running_results = {
         "batch_sizes": 0,
-        "d_reduced_loss": 0,
-        "g_reduced_loss": 0,
+        "d_loss": 0,
+        "g_loss": 0,
         "step": ""
     }
 
     for i, (lr_image, hr_image) in enumerate(train_loader):
         batch_size = lr_image.shape[0]
         running_results["batch_sizes"] += batch_size
-        running_results["step"] = f"{i+1}/{train_loader.size//batch_size}"
+        running_results["step"] = f"{i + 1}/{train_loader.size // batch_size}"
         adjust_learning_rate(epoch, i, train_loader.size)
 
         if prof and i > 10:
@@ -181,7 +181,7 @@ def train(epoch):
             d_reduced_loss = reduce_tensor(d_loss, world_size)
         else:
             d_reduced_loss = d_loss
-        running_results["d_reduced_loss"] += d_reduced_loss.item() * batch_size
+        running_results["d_loss"] += d_reduced_loss.item() * batch_size
         d_loss.backward(retain_graph=True)
         optimizerD.step()
 
@@ -194,7 +194,7 @@ def train(epoch):
             g_reduced_loss = reduce_tensor(g_loss, world_size)
         else:
             g_reduced_loss = g_loss
-        running_results["g_reduced_loss"] += g_reduced_loss.item() * batch_size
+        running_results["g_loss"] += g_reduced_loss.item() * batch_size
         g_loss.backward()
         optimizerG.step()
 
@@ -288,11 +288,11 @@ def main():
             results["mse"].append(val_results["mse"])
             results["g_lr"].append(optimizerG.param_groups[0]["lr"])
             results["d_lr"].append(optimizerD.param_groups[0]["lr"])
-            results["d_reduced_loss"].append(
-                running_results["d_reduced_loss"] / running_results["batch_sizes"]
+            results["d_loss"].append(
+                running_results["d_loss"] / running_results["batch_sizes"]
             )
-            results["g_reduced_loss"].append(
-                running_results["g_reduced_loss"] / running_results["batch_sizes"]
+            results["g_loss"].append(
+                running_results["g_loss"] / running_results["batch_sizes"]
             )
             results["epoch_time"].append(epoch_time.val)
             if epoch != 0 and not prof:
