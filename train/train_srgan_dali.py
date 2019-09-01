@@ -267,11 +267,9 @@ def main():
     }
     for epoch in range(epochs):
         running_results = train(epoch)
-
+        val_results = validate()
         if local_rank == 0:
-            val_results = validate()
             print(val_results)
-
             epoch_time.update(time.time() - end)
             end = time.time()
 
