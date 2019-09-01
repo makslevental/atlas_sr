@@ -129,9 +129,9 @@ train_loader = StupidDALIIterator(
 )
 val_pipe = SRGANMXNetPipeline(
     batch_size=batch_size,
-    num_gpus=1,
+    num_gpus=world_size,
     num_threads=workers,
-    device_id=0,
+    device_id=local_rank,
     crop=crop_size,
     dali_cpu=False,
     mx_path=val_mx_path,
@@ -178,10 +178,8 @@ def train(epoch):
         d_loss = 1 - real_out + fake_out
 
         if distributed:
-            d_reduced_loss = reduce_tensor(d_loss, world_size)
-        else:
-            d_reduced_loss = d_loss
-        running_results["d_loss"] += d_reduced_loss.item() * batch_size
+            d_loss = reduce_tensor(d_loss, world_size)
+        running_results["d_loss"] += d_loss.item() * batch_size
         d_loss.backward(retain_graph=True)
         optimizerD.step()
 
@@ -191,10 +189,8 @@ def train(epoch):
         netG.zero_grad()
         g_loss = generator_criterion(fake_out, fake_img, hr_image)
         if distributed:
-            g_reduced_loss = reduce_tensor(g_loss, world_size)
-        else:
-            g_reduced_loss = g_loss
-        running_results["g_loss"] += g_reduced_loss.item() * batch_size
+            g_loss = reduce_tensor(g_loss, world_size)
+        running_results["g_loss"] += g_loss.item() * batch_size
         g_loss.backward()
         optimizerG.step()
 
@@ -220,6 +216,10 @@ def validate():
 
         batch_mse = ((sr_image - hr_image) ** 2).mean()
         batch_ssim = ssim(sr_image, hr_image)
+
+        if distributed:
+            batch_mse = reduce_tensor(batch_mse, world_size)
+            batch_ssim = reduce_tensor(batch_ssim, world_size)
 
         valing_results["mse"] += batch_mse.item() * batch_size
         valing_results["ssims"] += batch_ssim.item() * batch_size
