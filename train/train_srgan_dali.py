@@ -155,10 +155,12 @@ def train(epoch):
         "batch_sizes": 0,
         "d_loss": 0,
         "g_loss": 0,
-        "step": ""
+        "step": "",
+        "batch_time": 0
     }
 
     for i, (lr_image, hr_image) in enumerate(train_loader):
+        start = time.time()
         batch_size = lr_image.shape[0]
         running_results["batch_sizes"] += batch_size
         running_results["step"] = f"{i + 1}/{train_loader.size // batch_size}"
@@ -195,6 +197,7 @@ def train(epoch):
         optimizerG.step()
 
         torch.cuda.synchronize(device=torch.cuda.current_device())
+        running_results["batch_time"] = time.time() - start
 
         if local_rank == 0:
             print(running_results)
