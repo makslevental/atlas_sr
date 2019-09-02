@@ -100,8 +100,8 @@ generator_criterion = lambda fake_out, fake_img, hr_image: generator_criterion_3
     torch.cat([hr_image, hr_image, hr_image], dim=1),
 )
 
-optimizerG = torch.optim.Adam(netG.parameters())
-optimizerD = torch.optim.Adam(netD.parameters())
+optimizerG = torch.optim.Adam(netG.parameters(), lr=lr)
+optimizerD = torch.optim.Adam(netD.parameters(), lr=lr)
 
 train_pipe = SRGANMXNetPipeline(
     batch_size=batch_size,
