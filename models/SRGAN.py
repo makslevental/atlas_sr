@@ -144,8 +144,8 @@ class UpsampleBLock(nn.Module):
             in_channels, in_channels * up_scale ** 2, kernel_size=3, padding=1
         )
         self.pixel_shuffle = nn.PixelShuffle(up_scale)
-        kernel = ICNR(self.conv.weight, upscale_factor=up_scale)
-        self.conv.weight.data.copy_(kernel)
+        # kernel = ICNR(self.conv.weight, upscale_factor=up_scale)
+        # self.conv.weight.data.copy_(kernel)
         self.prelu = nn.PReLU()
 
     def forward(self, x):
@@ -290,11 +290,11 @@ def count():
     d3 = Discriminator(in_channels=3)
     d1 = Discriminator(in_channels=1)
     dfat = DiscriminatorFatKernel(in_channels=1)
-    print(count_parameters(m3))
-    print(count_parameters(m1))
-    print(count_parameters(d3))
-    print(count_parameters(d1))
-    print(count_parameters(dfat))
+    print("3 channel generator", count_parameters(m3))
+    print("1 channel generator", count_parameters(m1))
+    print("3 channel discriminator", count_parameters(d3))
+    print("1 channel discriminator", count_parameters(d1))
+    print("4x4 kernel discriminator", count_parameters(dfat))
 
 
 if __name__ == "__main__":
