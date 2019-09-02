@@ -7,6 +7,7 @@ import pandas as pd
 import torch
 import torch.backends.cudnn
 import torch.distributed
+from apex.parallel import DistributedDataParallel as DDP
 
 from data_utils.dali import StupidDALIIterator, SRGANMXNetPipeline
 from metrics.metrics import AverageMeter
@@ -14,26 +15,21 @@ from metrics.ssim import ssim
 from models.SRGAN import Generator, Discriminator, GeneratorLoss
 from util.util import reduce_tensor
 
-try:
-    from nvidia.dali.pipeline import Pipeline
-    import nvidia.dali.ops as ops
-    import nvidia.dali.types as types
-except ImportError:
-    raise ImportError(
-        "Please install DALI from https://www.github.com/NVIDIA/DALI to run this example."
-    )
-
 parser = argparse.ArgumentParser()
 parser.add_argument("--local_rank", default=0, type=int)
+parser.add_argument("--experiment-name", type=str)
 parser.add_argument("--train-mx-path", default="/home/maksim/data/voc_train.rec")
 parser.add_argument("--train-mx-index-path", default="/home/maksim/data/voc_train.idx")
 parser.add_argument("--val-mx-path", default="/home/maksim/data/voc_val.rec")
 parser.add_argument("--val-mx-index-path", default="/home/maksim/data/voc_val.idx")
 parser.add_argument("--checkpoint-dir", default="/tmp")
+parser.add_argument("--upscale-factor", type=int, default=2)
+parser.add_argument("--epochs", type=int, default=100)
 parser.add_argument("--batch-size", type=int, default=16)
 parser.add_argument("--prof", action="store_true", default=False)
 parser.add_argument("--lr", type=float, default=1e-4)
 parser.add_argument("--crop-size", type=int, default=88)
+parser.add_argument("--workers", type=int, default=1)
 
 args = parser.parse_args()
 local_rank = args.local_rank
@@ -41,13 +37,26 @@ train_mx_path = args.train_mx_path
 train_mx_index_path = args.train_mx_index_path
 val_mx_path = args.val_mx_path
 val_mx_index_path = args.val_mx_index_path
+experiment_name = args.experiment_name
 checkpoint_dir = args.checkpoint_dir
+upscale_factor = args.upscale_factor
+epochs = args.epochs
+batch_size = args.batch_size
+crop_size = args.crop_size
+prof = args.prof
+workers = args.workers
+lr = args.lr
 
 assert os.path.exists(train_mx_path)
 assert os.path.exists(train_mx_index_path)
 assert os.path.exists(val_mx_path)
 assert os.path.exists(val_mx_index_path)
+assert experiment_name
 assert os.path.exists(checkpoint_dir)
+
+checkpoint_dir = os.path.join(checkpoint_dir, experiment_name)
+if not os.path.exists(checkpoint_dir):
+    os.mkdir(checkpoint_dir)
 
 distributed = False
 world_size = 1
@@ -61,25 +70,9 @@ if distributed:
     torch.distributed.init_process_group(backend="nccl", init_method="env://")
     assert world_size == torch.distributed.get_world_size()
 
-# make apex optional
-if distributed:
-    try:
-        from apex.parallel import DistributedDataParallel as DDP
-    except ImportError:
-        raise ImportError(
-            "Please install apex from https://www.github.com/nvidia/apex to run this example."
-        )
-
-upscale_factor = 2
-epochs = 100
-batch_size = args.batch_size
-crop_size = args.crop_size
 total_batch_size = world_size * batch_size
-prof = args.prof
 static_loss_scale = 1.0
 dynamic_loss_scale = False
-lr = args.lr
-workers = 1
 resume = False
 dali_cpu = False
 print_freq = 10
