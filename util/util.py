@@ -219,3 +219,7 @@ def reduce_tensor(tensor, world_size):
     torch.distributed.all_reduce(rt)
     rt /= world_size
     return rt
+
+
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)

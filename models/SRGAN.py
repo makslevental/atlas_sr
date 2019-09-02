@@ -6,6 +6,8 @@ from torch import nn
 from torchvision.models import vgg16
 from torchvision.transforms import ToTensor, Resize, Compose
 
+from util.util import count_parameters
+
 
 class Generator(nn.Module):
     def __init__(self, *, scale_factor, in_channels):
@@ -78,6 +80,44 @@ class Discriminator(nn.Module):
         return torch.sigmoid(self.net(x).view(batch_size))
 
 
+class DiscriminatorFatKernel(nn.Module):
+    def __init__(self, *, in_channels):
+        super(DiscriminatorFatKernel, self).__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(in_channels, 64, kernel_size=3, padding=1),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(64, 64, kernel_size=4, stride=2, padding=2),
+            nn.BatchNorm2d(64),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(128, 128, kernel_size=4, stride=2, padding=2),
+            nn.BatchNorm2d(128),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(128, 256, kernel_size=3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(256, 256, kernel_size=4, stride=2, padding=2),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(256, 512, kernel_size=3, padding=1),
+            nn.BatchNorm2d(512),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(512, 512, kernel_size=4, stride=2, padding=2),
+            nn.BatchNorm2d(512),
+            nn.LeakyReLU(0.2),
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(512, 1024, kernel_size=1),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(1024, 1, kernel_size=1),
+        )
+
+    def forward(self, x):
+        batch_size = x.size(0)
+        return torch.sigmoid(self.net(x).view(batch_size))
+
+
 class ResidualBlock(nn.Module):
     def __init__(self, n_feat_maps):
         super(ResidualBlock, self).__init__()
@@ -104,6 +144,8 @@ class UpsampleBLock(nn.Module):
             in_channels, in_channels * up_scale ** 2, kernel_size=3, padding=1
         )
         self.pixel_shuffle = nn.PixelShuffle(up_scale)
+        kernel = ICNR(self.conv.weight, upscale_factor=up_scale)
+        self.conv.weight.data.copy_(kernel)
         self.prelu = nn.PReLU()
 
     def forward(self, x):
@@ -111,6 +153,46 @@ class UpsampleBLock(nn.Module):
         x = self.pixel_shuffle(x)
         x = self.prelu(x)
         return x
+
+
+def ICNR(tensor, upscale_factor=2, inizializer=nn.init.kaiming_normal_):
+    """Fills the input Tensor or Variable with values according to the method
+    described in "Checkerboard artifact free sub-pixel convolution"
+    - Andrew Aitken et al. (2017), this inizialization should be used in the
+    last convolutional layer before a PixelShuffle operation
+    Args:
+        tensor: an n-dimensional torch.Tensor or autograd.Variable
+        upscale_factor: factor to increase spatial resolution by
+        inizializer: inizializer to be used for sub_kernel inizialization
+    Examples:
+        >>> upscale = 8
+        >>> num_classes = 10
+        >>> previous_layer_features = Variable(torch.Tensor(8, 64, 32, 32))
+        >>> conv_shuffle = Conv2d(64, num_classes * (upscale ** 2), 3, padding=1, bias=0)
+        >>> ps = PixelShuffle(upscale)
+        >>> kernel = ICNR(conv_shuffle.weight, scale_factor=upscale)
+        >>> conv_shuffle.weight.data.copy_(kernel)
+        >>> output = ps(conv_shuffle(previous_layer_features))
+        >>> print(output.shape)
+        torch.Size([8, 10, 256, 256])
+    .. _Checkerboard artifact free sub-pixel convolution:
+        https://arxiv.org/abs/1707.02937
+    """
+    new_shape = [int(tensor.shape[0] / (upscale_factor ** 2))] + list(tensor.shape[1:])
+    subkernel = torch.zeros(new_shape)
+    subkernel = inizializer(subkernel)
+    subkernel = subkernel.transpose(0, 1)
+
+    subkernel = subkernel.contiguous().view(subkernel.shape[0], subkernel.shape[1], -1)
+
+    kernel = subkernel.repeat(1, 1, upscale_factor ** 2)
+
+    transposed_shape = [tensor.shape[1]] + [tensor.shape[0]] + list(tensor.shape[2:])
+    kernel = kernel.contiguous().view(transposed_shape)
+
+    kernel = kernel.transpose(0, 1)
+
+    return kernel
 
 
 class GeneratorLoss(nn.Module):
@@ -136,10 +218,10 @@ class GeneratorLoss(nn.Module):
         # TV Loss
         tv_loss = self.tv_loss(out_images)
         return (
-                image_loss
-                + 0.001 * adversarial_loss
-                + 0.006 * perception_loss
-                + 2e-8 * tv_loss
+            image_loss
+            + 0.001 * adversarial_loss
+            + 0.006 * perception_loss
+            + 2e-8 * tv_loss
         )
 
 
@@ -163,15 +245,20 @@ class TVLoss(nn.Module):
         return t.size()[1] * t.size()[2] * t.size()[3]
 
 
-def test_gray():
+def gray():
     img = Image.open(
         "/home/maksim/data/ILSVRC2017_CLS-LOC/ILSVRC/Data/CLS-LOC/val/ILSVRC2012_val_00050000.JPEG"
     ).convert("L")
     img_tensor = ToTensor()(img).unsqueeze(0)
-    two_x = Compose([
-        Resize((2 * img_tensor.shape[2], 2 * img_tensor.shape[3]), interpolation=Image.BICUBIC),
-        ToTensor()
-    ])(img).unsqueeze(0)
+    two_x = Compose(
+        [
+            Resize(
+                (2 * img_tensor.shape[2], 2 * img_tensor.shape[3]),
+                interpolation=Image.BICUBIC,
+            ),
+            ToTensor(),
+        ]
+    )(img).unsqueeze(0)
 
     g = Generator(scale_factor=2, in_channels=1)
     d = Discriminator(in_channels=1)
@@ -183,10 +270,34 @@ def test_gray():
     loss = g_loss(
         fake_out,
         torch.cat([fake_img, fake_img, fake_img], dim=1),
-        torch.cat([two_x, two_x, two_x], dim=1))
+        torch.cat([two_x, two_x, two_x], dim=1),
+    )
 
     print(fake_img, fake_out, real_out, loss)
 
 
+def upsample():
+    upscale = 2
+    channels = 1
+    i = torch.arange(9, dtype=torch.float).reshape(1, 1, 3, 3)
+    upsample_block = UpsampleBLock(channels, upscale)
+    print(i.shape, upsample_block(i).shape)
+
+
+def count():
+    m3 = Generator(scale_factor=2, in_channels=3)
+    m1 = Generator(scale_factor=2, in_channels=1)
+    d3 = Discriminator(in_channels=3)
+    d1 = Discriminator(in_channels=1)
+    dfat = DiscriminatorFatKernel(in_channels=1)
+    print(count_parameters(m3))
+    print(count_parameters(m1))
+    print(count_parameters(d3))
+    print(count_parameters(d1))
+    print(count_parameters(dfat))
+
+
 if __name__ == "__main__":
-    test_gray()
+    # test_gray()
+    # upsample()
+    count()
