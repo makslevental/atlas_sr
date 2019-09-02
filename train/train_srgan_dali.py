@@ -54,9 +54,10 @@ assert os.path.exists(val_mx_index_path)
 assert experiment_name
 assert os.path.exists(checkpoint_dir)
 
-checkpoint_dir = os.path.join(checkpoint_dir, experiment_name)
-if not os.path.exists(checkpoint_dir):
-    os.mkdir(checkpoint_dir)
+if local_rank == 0:
+    checkpoint_dir = os.path.join(checkpoint_dir, experiment_name)
+    if not os.path.exists(checkpoint_dir):
+        os.mkdir(checkpoint_dir)
 
 distributed = False
 world_size = 1
