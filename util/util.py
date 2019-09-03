@@ -1,4 +1,5 @@
 import gc
+import inspect
 import os
 import re
 from collections import OrderedDict
@@ -223,3 +224,24 @@ def reduce_tensor(tensor, world_size):
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+def monkey_patch_bn():
+    # https://discuss.pytorch.org/t/training-performance-degrades-with-distributeddataparallel/47152
+    # print(inspect.getsource(torch.nn.functional.batch_norm))
+    def batch_norm(input, running_mean, running_var, weight=None, bias=None,
+                   training=False, momentum=0.1, eps=1e-5):
+        if training:
+            size = input.size()
+            size_prods = size[0]
+            for i in range(len(size) - 2):
+                size_prods *= size[i + 2]
+            if size_prods == 1:
+                raise ValueError('Expected more than 1 value per channel when training, got input size {}'.format(size))
+
+        return torch.batch_norm(
+            input, weight, bias, running_mean, running_var,
+            training, momentum, eps, False
+        )
+    torch.nn.functional.batch_norm = batch_norm
+    # print(inspect.getsource(torch.nn.functional.batch_norm))

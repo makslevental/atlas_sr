@@ -101,7 +101,7 @@ class StupidDALIIterator:
 
 class SRGANPipeline(Pipeline):
     def __init__(
-            self, batch_size, num_threads, device_id, crop, upscale_factor, dali_cpu=False
+            self, batch_size, num_threads, device_id, crop, upscale_factor, image_type, dali_cpu=False
     ):
         super(SRGANPipeline, self).__init__(
             batch_size, num_threads, device_id
@@ -114,7 +114,7 @@ class SRGANPipeline(Pipeline):
         host_memory_padding = 140544512 if decoder_device == "mixed" else 0
         self.decode = ops.ImageDecoderCrop(
             device=decoder_device,
-            output_type=types.DALIImageType.GRAY,
+            output_type=image_type,
             device_memory_padding=device_memory_padding,
             host_memory_padding=host_memory_padding,
             crop=crop,
@@ -125,7 +125,7 @@ class SRGANPipeline(Pipeline):
             resize_x=crop // upscale_factor,
             resize_y=crop // upscale_factor,
             interp_type=types.DALIInterpType.INTERP_CUBIC,
-            image_type=types.GRAY,
+            image_type=image_type,
         )
         self.uniform_rng = ops.Uniform(range=(0.0, 1.0))
         self.cast = ops.Cast(device=dali_device, dtype=types.DALIDataType.FLOAT)
@@ -150,13 +150,14 @@ class SRGANMXNetPipeline(SRGANPipeline):
             device_id,
             crop,
             upscale_factor,
+            image_type,
             mx_path,
             mx_index_path,
             dali_cpu=False,
             random_shuffle=True
     ):
         super(SRGANMXNetPipeline, self).__init__(
-            batch_size, num_threads, device_id, crop, upscale_factor, dali_cpu
+            batch_size, num_threads, device_id, crop, upscale_factor, image_type, dali_cpu
         )
         self.input = ops.MXNetReader(
             path=[mx_path],
@@ -177,13 +178,14 @@ class SRGANFilePipeline(SRGANPipeline):
             device_id,
             crop,
             upscale_factor,
+            image_type,
             data_dir,
             file_list,
             dali_cpu=False,
             random_shuffle=True
     ):
         super(SRGANFilePipeline, self).__init__(
-            batch_size, num_threads, device_id, crop, upscale_factor, dali_cpu
+            batch_size, num_threads, device_id, crop, upscale_factor, image_type, dali_cpu
         )
         self.input = ops.FileReader(
             file_root=data_dir,
