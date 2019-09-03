@@ -5,23 +5,19 @@ from math import log10
 
 import pandas as pd
 import torch
+from nvidia.dali.backend_impl import types
+from torch import nn
 import torch.backends.cudnn
 import torch.distributed
-from torch import nn
-from torch.utils.data import DataLoader
-from tqdm import tqdm
+from apex.parallel import DistributedDataParallel as DDP
+from apex.parallel import SyncBatchNorm
 
-from util.util import monkey_patch_bn
-
-torch.autograd.set_detect_anomaly(True)
-# torch.backends.cudnn.enabled = False
-
-monkey_patch_bn()
-
+from data_utils.dali import StupidDALIIterator, SRGANMXNetPipeline
 from metrics.metrics import AverageMeter
 from metrics.ssim import ssim
 from models.SRGAN import Generator, Discriminator, GeneratorLoss
-from train.train_srgan_slow import ValDatasetFromFolder, TrainDatasetFromFolder
+from util.util import reduce_tensor, monkey_patch_bn
+monkey_patch_bn()
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--local_rank", default=0, type=int)
@@ -54,11 +50,6 @@ crop_size = args.crop_size
 prof = args.prof
 workers = args.workers
 lr = args.lr
-static_loss_scale = 1.0
-dynamic_loss_scale = False
-resume = False
-dali_cpu = False
-print_freq = 10
 
 assert os.path.exists(train_mx_path)
 assert os.path.exists(train_mx_index_path)
@@ -78,62 +69,75 @@ world_size = 1
 if "WORLD_SIZE" in os.environ:
     world_size = int(os.environ["WORLD_SIZE"])
     distributed = world_size > 1
-
-print(f"distributed: {distributed}")
-netG = Generator(scale_factor=upscale_factor, in_channels=3)
-netD = Discriminator(in_channels=3)
-generator_loss = GeneratorLoss()
-total_batch_size = world_size * batch_size
-
 if distributed:
     gpu = local_rank % torch.cuda.device_count()
-    print(gpu)
     torch.cuda.set_device(gpu)
     torch.distributed.init_process_group(backend="nccl", init_method="env://")
     assert world_size == torch.distributed.get_world_size()
-    netG = netG.cuda(gpu)
-    netD = netD.cuda(gpu)
-    generator_loss = generator_loss.cuda(gpu)
-    netG = torch.nn.SyncBatchNorm.convert_sync_batchnorm(netG)
-    netD = torch.nn.SyncBatchNorm.convert_sync_batchnorm(netD)
-    netG = torch.nn.parallel.DistributedDataParallel(
-        netG, device_ids=[gpu], broadcast_buffers=False
-    )
-    netD = torch.nn.parallel.DistributedDataParallel(
-        netD, device_ids=[gpu], broadcast_buffers=False
-    )
+print(f"distributed: {distributed}")
+
+netG = Generator(scale_factor=upscale_factor, in_channels=3)
+netD = Discriminator(in_channels=3)
+netG = netG.cuda()
+netD = netD.cuda()
+generator_criterion = GeneratorLoss()
+generator_criterion = generator_criterion.cuda()
+if distributed:
+    # shared param/delay all reduce turns off bucketing in DDP, for lower latency runs this can improve perf
+    # for the older version of APEX please use shared_param, for newer one it is delay_allreduce
+    netG = DDP(netG, delay_allreduce=True)
+    netD = DDP(netD, delay_allreduce=True)
     lr /= world_size
 else:
-    gpu = 0
     netG = nn.DataParallel(netG)
     netD = nn.DataParallel(netD)
-    netG = netG.cuda()
-    netD = netD.cuda()
-    generator_loss = generator_loss.cuda()
+
+
+# because vgg excepts 3 channels
+# generator_criterion = lambda fake_out, fake_img, hr_image: generator_criterion_3(
+#     fake_out,
+#     torch.cat([fake_img, fake_img, fake_img], dim=1),
+#     torch.cat([hr_image, hr_image, hr_image], dim=1),
+# )
 
 optimizerG = torch.optim.Adam(netG.parameters(), lr=lr)
 optimizerD = torch.optim.Adam(netD.parameters(), lr=lr)
 
-train_set = TrainDatasetFromFolder(
-    "/home/maksim/data/VOC2012/train",
-    crop_size=crop_size,
-    upscale_factor=upscale_factor,
-)
-if distributed:
-    dist_sampler = torch.utils.data.distributed.DistributedSampler(train_set)
-train_loader = DataLoader(
-    dataset=train_set,
-    num_workers=4,
+train_pipe = SRGANMXNetPipeline(
     batch_size=batch_size,
-    sampler=dist_sampler if distributed else None,
-    shuffle=not distributed,
-    pin_memory=True,
+    num_gpus=world_size,
+    num_threads=workers,
+    device_id=local_rank,
+    crop=crop_size,
+    mx_path=train_mx_path,
+    mx_index_path=train_mx_index_path,
+    upscale_factor=upscale_factor,
+    image_type=types.DALIImageType.RGB
 )
-val_set = ValDatasetFromFolder(
-    "/home/maksim/data/VOC2012/val", upscale_factor=upscale_factor
+train_pipe.build()
+train_loader = StupidDALIIterator(
+    pipelines=[train_pipe],
+    output_map=["lr_image", "hr_image"],
+    size=int(train_pipe.epoch_size("Reader") / world_size),
+    auto_reset=False,
 )
-val_loader = DataLoader(
-    dataset=val_set, num_workers=4, batch_size=1, shuffle=False, pin_memory=True
+val_pipe = SRGANMXNetPipeline(
+    batch_size=batch_size,
+    num_gpus=world_size,
+    num_threads=workers,
+    device_id=local_rank,
+    crop=crop_size,
+    mx_path=val_mx_path,
+    mx_index_path=val_mx_index_path,
+    upscale_factor=upscale_factor,
+    random_shuffle=False,
+    image_type=types.DALIImageType.RGB
+)
+val_pipe.build()
+val_loader = StupidDALIIterator(
+    pipelines=[val_pipe],
+    output_map=["lr_image", "hr_image"],
+    size=int(val_pipe.epoch_size("Reader") / world_size),
 )
 
 
@@ -146,46 +150,47 @@ def train(epoch):
         "d_loss": 0,
         "g_loss": 0,
         "step": "",
-        "batch_time": 0,
+        "batch_time": 0
     }
 
     for i, (lr_image, hr_image) in enumerate(train_loader):
         start = time.time()
-
-        batch_size = lr_image.size(0)
+        batch_size = lr_image.shape[0]
         running_results["batch_sizes"] += batch_size
+        running_results["step"] = f"{i + 1}/{train_loader.size // batch_size}"
+        # adjust_learning_rate(epoch, i, train_loader.size)
 
-        if gpu is not None:
-            lr_image = lr_image.cuda(gpu, non_blocking=True)
-            hr_image = hr_image.cuda(gpu, non_blocking=True)
+        if prof and i > 10:
+            break
 
         ############################
         # (1) Update D network: maximize D(x)-1-D(G(z))
+        ##########################
         fake_img = netG(lr_image)
 
         netD.zero_grad()
         real_out = netD(hr_image).mean()
         fake_out = netD(fake_img).mean()
         d_loss = 1 - real_out + fake_out
+
+        if distributed:
+            d_loss = reduce_tensor(d_loss, world_size)
+        running_results["d_loss"] += d_loss.item() * batch_size
         d_loss.backward(retain_graph=True)
         optimizerD.step()
 
-        ###########################
+        ############################
         # (2) Update G network: minimize 1-D(G(z)) + Perception Loss + Image Loss + TV Loss
-        ##########################
+        ###########################
         netG.zero_grad()
-        g_loss = generator_loss(fake_out, fake_img, hr_image)
+        g_loss = generator_criterion(fake_out, fake_img, hr_image)
+        if distributed:
+            g_loss = reduce_tensor(g_loss, world_size)
+        running_results["g_loss"] += g_loss.item() * batch_size
         g_loss.backward()
         optimizerG.step()
 
-        # record stats
-        fake_img = netG(lr_image)
-        fake_out = netD(fake_img).mean()
-        g_loss = generator_loss(fake_out, fake_img, hr_image)
-        running_results["g_loss"] += g_loss.item() * batch_size
-        d_loss = 1 - real_out + fake_out
-        running_results["d_loss"] += d_loss.item() * batch_size
-
+        torch.cuda.synchronize(device=torch.cuda.current_device())
         running_results["batch_time"] = time.time() - start
 
         if local_rank == 0:
@@ -196,27 +201,52 @@ def train(epoch):
 
 def validate():
     netG.eval()
-    val_bar = tqdm(val_loader, "validate")
     valing_results = {"mse": 0, "ssims": 0, "psnr": 0, "ssim": 0, "batch_sizes": 0}
-    for lr, val_hr_restore, hr in val_bar:
-        batch_size = lr.size(0)
+    for i, (lr_image, hr_image) in enumerate(val_loader):
+        if prof and i > 10:
+            break
+
+        batch_size = lr_image.shape[0]
         valing_results["batch_sizes"] += batch_size
+        with torch.no_grad():
+            sr_image = netG(lr_image)
 
-        if gpu is not None:
-            lr = lr.cuda(gpu, non_blocking=True)
-            hr = hr.cuda(gpu, non_blocking=True)
-        sr = netG(lr)
+        batch_mse = ((sr_image - hr_image) ** 2).mean()
+        batch_ssim = ssim(sr_image, hr_image)
 
-        batch_mse = ((sr - hr) ** 2).data.mean()
-        valing_results["mse"] += batch_mse * batch_size
-        batch_ssim = ssim(sr, hr).item()
-        valing_results["ssims"] += batch_ssim * batch_size
-        valing_results["psnr"] = 10 * log10(
-            1 / (valing_results["mse"] / valing_results["batch_sizes"])
-        )
-        valing_results["ssim"] = valing_results["ssims"] / valing_results["batch_sizes"]
+        if distributed:
+            batch_mse = reduce_tensor(batch_mse, world_size)
+            batch_ssim = reduce_tensor(batch_ssim, world_size)
 
+        valing_results["mse"] += batch_mse.item() * batch_size
+        valing_results["ssims"] += batch_ssim.item() * batch_size
+
+    valing_results["psnr"] = 10 * log10(
+        1 / (valing_results["mse"] / valing_results["batch_sizes"])
+    )
+    valing_results["ssim"] = valing_results["ssims"] / valing_results["batch_sizes"]
     return valing_results
+
+
+def adjust_learning_rate(epoch, step, len_epoch):
+    factor = epoch // 30
+
+    if epoch >= 80:
+        factor = factor + 1
+
+    lr = args.lr * (0.1 ** factor)
+
+    """Warmup"""
+    if epoch < 5:
+        lr = lr * float(1 + step + epoch * len_epoch) / (5.0 * len_epoch)
+
+    if args.local_rank == 0 and step % print_freq == 0 and step > 1:
+        print("Epoch = {}, step = {}, lr = {}".format(epoch, step, lr))
+
+    for param_group in optimizerG.param_groups:
+        param_group["lr"] = lr
+    for param_group in optimizerD.param_groups:
+        param_group["lr"] = lr
 
 
 def main():
@@ -233,11 +263,9 @@ def main():
         "epoch_time": [],
     }
     for epoch in range(epochs):
-        train_loader.sampler.set_epoch(epoch)
         running_results = train(epoch)
+        val_results = validate()
         if local_rank == 0:
-            val_results = validate()
-            val_results["epoch"] = epoch
             print(val_results)
             epoch_time.update(time.time() - end)
             end = time.time()
@@ -267,6 +295,9 @@ def main():
                 data_frame.to_csv(
                     os.path.join(checkpoint_dir, "metrics.csv"), index_label="Epoch"
                 )
+
+        val_loader.reset()
+        train_loader.reset()
 
 
 if __name__ == "__main__":

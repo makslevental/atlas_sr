@@ -211,7 +211,7 @@ class SRGANVOCPipeline(Pipeline):
             dali_cpu=False,
     ):
         super(SRGANVOCPipeline, self).__init__(
-            batch_size, num_threads, device_id, seed=12 + device_id
+            batch_size, num_threads, device_id
         )
         self.input = ops.MXNetReader(
             path=[mx_path],
