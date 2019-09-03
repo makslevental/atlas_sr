@@ -259,7 +259,7 @@ def main(
         train_data_dir, crop_size=crop_size, upscale_factor=upscale_factor
     )
     train_loader = DataLoader(
-        dataset=train_set, num_workers=4, batch_size=16, shuffle=False
+        dataset=train_set, num_workers=4, batch_size=128, shuffle=True
     )
     val_set = ValDatasetFromFolder(val_data_dir, upscale_factor=upscale_factor)
     val_loader = DataLoader(dataset=val_set, num_workers=4, batch_size=1, shuffle=False)
@@ -283,6 +283,7 @@ def main(
             netG, netD, optimizerG, optimizerD, generator_criterion, train_loader
         )
         valing_results = validate(netG, val_loader)
+        valing_results["epoch"] = epoch
         print(valing_results)
         torch.save(
             netG.state_dict(),
@@ -320,6 +321,6 @@ if __name__ == "__main__":
         upscale_factor=2,
         train_data_dir="/home/maksim/data/VOC2012/train",
         val_data_dir="/home/maksim/data/VOC2012/val",
-        checkpoint_dir="/tmp",
-        metrics_csv_fp="/tmp/metrics.csv",
+        checkpoint_dir="/home/maksim/dev_projects/atlas_sr/checkpoints/srgan_slow",
+        metrics_csv_fp="/home/maksim/dev_projects/atlas_sr/checkpoints/srgan_slow/metrics.csv",
     )

@@ -107,4 +107,4 @@ def dump_all_frames_all_arfs(arfs_dir: str, dump_dir: str, frame_rate: int = 30)
 
 if __name__ == "__main__":
     # dump_all_frames_all_arfs(DSIAC_ARFS_DIR, "/tmp")
-    ARF("/home/maksim/dev_projects/atlas_sr/data/cegr00101_0000.arf").show_frame(1)
+    ARF("/home/maksim/data/DSIAC/cegr/arf/cegr01923_0011.arf").save_frame(1140, "/tmp/cegr01923_0011.tiff")
