@@ -121,8 +121,6 @@ else:
 
 optimizerG = torch.optim.Adam(netG.parameters(), lr=g_lr)
 optimizerD = torch.optim.Adam(netD.parameters(), lr=d_lr)
-# optimizerG = torch.optim.SGD(netG.parameters(), lr=lr)
-# optimizerD = torch.optim.SGD(netD.parameters(), lr=lr)
 
 train_pipe = SRGANMXNetPipeline(
     batch_size=batch_size,
