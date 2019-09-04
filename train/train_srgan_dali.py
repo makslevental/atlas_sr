@@ -8,6 +8,7 @@ import torch
 import torch.backends.cudnn
 import torch.distributed
 from apex.parallel import DistributedDataParallel as DDP
+from torch import nn
 
 from data_utils.dali import StupidDALIIterator, SRGANMXNetPipeline
 from metrics.metrics import AverageMeter
@@ -70,6 +71,7 @@ if distributed:
     torch.cuda.set_device(gpu)
     torch.distributed.init_process_group(backend="nccl", init_method="env://")
     assert world_size == torch.distributed.get_world_size()
+    lr *= world_size
 
 total_batch_size = world_size * batch_size
 static_loss_scale = 1.0
@@ -78,27 +80,31 @@ resume = False
 dali_cpu = False
 print_freq = 10
 
-netG = Generator(scale_factor=upscale_factor, in_channels=1)
-netD = Discriminator(in_channels=1)
-netG = netG.cuda()
-netD = netD.cuda()
+netG = Generator(scale_factor=upscale_factor, in_channels=3)
+netD = Discriminator(in_channels=3)
 
 # because vgg excepts 3 channels
-generator_criterion_3 = GeneratorLoss()
-generator_criterion_3 = generator_criterion_3.cuda()
+generator_criterion = GeneratorLoss()
+generator_criterion = generator_criterion.cuda()
 if distributed:
     # shared param/delay all reduce turns off bucketing in DDP, for lower latency runs this can improve perf
     # for the older version of APEX please use shared_param, for newer one it is delay_allreduce
+    netG = netG.cuda(gpu)
+    netD = netD.cuda(gpu)
     netG = DDP(netG, delay_allreduce=True)
     netD = DDP(netD, delay_allreduce=True)
-    generator_criterion_3 = DDP(generator_criterion_3, delay_allreduce=True)
+else:
+    netG = netG.cuda()
+    netD = netD.cuda()
+    netG = nn.DataParallel(netG)
+    netD = nn.DataParallel(netD)
 
 # because vgg excepts 3 channels
-generator_criterion = lambda fake_out, fake_img, hr_image: generator_criterion_3(
-    fake_out,
-    torch.cat([fake_img, fake_img, fake_img], dim=1),
-    torch.cat([hr_image, hr_image, hr_image], dim=1),
-)
+# generator_criterion = lambda fake_out, fake_img, hr_image: generator_criterion_3(
+#     fake_out,
+#     torch.cat([fake_img, fake_img, fake_img], dim=1),
+#     torch.cat([hr_image, hr_image, hr_image], dim=1),
+# )
 
 optimizerG = torch.optim.Adam(netG.parameters(), lr=lr)
 optimizerD = torch.optim.Adam(netD.parameters(), lr=lr)
@@ -158,7 +164,7 @@ def train(epoch):
         batch_size = lr_image.shape[0]
         running_results["batch_sizes"] += batch_size
         running_results["step"] = f"{i + 1}/{train_loader.size // batch_size}"
-        # adjust_learning_rate(epoch, i, train_loader.size)
+        #adjust_learning_rate(epoch, i, train_loader.size)
 
         if prof and i > 10:
             break

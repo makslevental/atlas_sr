@@ -114,7 +114,7 @@ class SRGANPipeline(Pipeline):
         host_memory_padding = 140544512 if decoder_device == "mixed" else 0
         self.decode = ops.ImageDecoderCrop(
             device=decoder_device,
-            output_type=types.DALIImageType.GRAY,
+            output_type=types.DALIImageType.RGB,
             device_memory_padding=device_memory_padding,
             host_memory_padding=host_memory_padding,
             crop=crop,
@@ -125,7 +125,7 @@ class SRGANPipeline(Pipeline):
             resize_x=crop // upscale_factor,
             resize_y=crop // upscale_factor,
             interp_type=types.DALIInterpType.INTERP_CUBIC,
-            image_type=types.GRAY,
+            image_type=types.RGB,
         )
         self.uniform_rng = ops.Uniform(range=(0.0, 1.0))
         self.cast = ops.Cast(device=dali_device, dtype=types.DALIDataType.FLOAT)
