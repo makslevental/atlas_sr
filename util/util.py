@@ -1,5 +1,4 @@
 import gc
-import inspect
 import os
 import re
 from collections import OrderedDict
@@ -13,7 +12,7 @@ from torch import Tensor, nn
 from torch.nn import ModuleList
 from torch.nn.parallel import DistributedDataParallel
 from torch.optim.optimizer import Optimizer
-
+from torch.distributed import all_reduce_multigpu, all_reduce
 from my_types import NoWeightDecayTypes, ParamList, BiasTypes
 
 old_filter = filter
@@ -217,7 +216,7 @@ def load_model_state(
 
 def reduce_tensor(tensor, world_size):
     rt = tensor.clone()
-    torch.distributed.all_reduce(rt)
+    all_reduce(rt)
     rt /= world_size
     return rt
 
@@ -243,5 +242,7 @@ def monkey_patch_bn():
             input, weight, bias, running_mean, running_var,
             training, momentum, eps, False
         )
+
     torch.nn.functional.batch_norm = batch_norm
     # print(inspect.getsource(torch.nn.functional.batch_norm))
+

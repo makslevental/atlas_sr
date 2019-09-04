@@ -7,15 +7,15 @@ from nvidia.dali.plugin.pytorch import DALIGenericIterator
 
 class ResNetImageNetPipeline(Pipeline):
     def __init__(
-            self,
-            batch_size,
-            num_gpus,
-            num_threads,
-            device_id,
-            crop,
-            mx_path,
-            mx_index_path,
-            dali_cpu=False,
+        self,
+        batch_size,
+        num_gpus,
+        num_threads,
+        device_id,
+        crop,
+        mx_path,
+        mx_index_path,
+        dali_cpu=False,
     ):
         super(ResNetImageNetPipeline, self).__init__(
             batch_size, num_threads, device_id, seed=12 + device_id
@@ -95,17 +95,27 @@ class StupidDALIIterator:
     def size(self):
         return self.dali_iter._size
 
+    # hack to make lr_finder work
+    @property
+    def dataset(self):
+        return [None] * self.size
+
     def reset(self):
         self.dali_iter.reset()
 
 
 class SRGANPipeline(Pipeline):
     def __init__(
-            self, batch_size, num_threads, device_id, crop, upscale_factor, image_type, dali_cpu=False
+        self,
+        batch_size,
+        num_threads,
+        device_id,
+        crop,
+        upscale_factor,
+        image_type,
+        dali_cpu=False,
     ):
-        super(SRGANPipeline, self).__init__(
-            batch_size, num_threads, device_id
-        )
+        super(SRGANPipeline, self).__init__(batch_size, num_threads, device_id)
         crop = calculate_valid_crop_size(crop, upscale_factor)
         decoder_device = "cpu" if dali_cpu else "mixed"
         # This padding sets the size of the internal nvJPEG buffers to be able to handle all images from full-sized ImageNet
@@ -142,22 +152,28 @@ class SRGANPipeline(Pipeline):
 
 class SRGANMXNetPipeline(SRGANPipeline):
     def __init__(
-            self,
-            *,
+        self,
+        *,
+        batch_size,
+        num_gpus,
+        num_threads,
+        device_id,
+        crop,
+        upscale_factor,
+        image_type,
+        mx_path,
+        mx_index_path,
+        dali_cpu=False,
+        random_shuffle=True,
+    ):
+        super(SRGANMXNetPipeline, self).__init__(
             batch_size,
-            num_gpus,
             num_threads,
             device_id,
             crop,
             upscale_factor,
             image_type,
-            mx_path,
-            mx_index_path,
-            dali_cpu=False,
-            random_shuffle=True
-    ):
-        super(SRGANMXNetPipeline, self).__init__(
-            batch_size, num_threads, device_id, crop, upscale_factor, image_type, dali_cpu
+            dali_cpu,
         )
         self.input = ops.MXNetReader(
             path=[mx_path],
@@ -170,22 +186,28 @@ class SRGANMXNetPipeline(SRGANPipeline):
 
 class SRGANFilePipeline(SRGANPipeline):
     def __init__(
-            self,
-            *,
+        self,
+        *,
+        batch_size,
+        num_gpus,
+        num_threads,
+        device_id,
+        crop,
+        upscale_factor,
+        image_type,
+        data_dir,
+        file_list,
+        dali_cpu=False,
+        random_shuffle=True,
+    ):
+        super(SRGANFilePipeline, self).__init__(
             batch_size,
-            num_gpus,
             num_threads,
             device_id,
             crop,
             upscale_factor,
             image_type,
-            data_dir,
-            file_list,
-            dali_cpu=False,
-            random_shuffle=True
-    ):
-        super(SRGANFilePipeline, self).__init__(
-            batch_size, num_threads, device_id, crop, upscale_factor, image_type, dali_cpu
+            dali_cpu,
         )
         self.input = ops.FileReader(
             file_root=data_dir,
@@ -198,21 +220,19 @@ class SRGANFilePipeline(SRGANPipeline):
 
 class SRGANVOCPipeline(Pipeline):
     def __init__(
-            self,
-            *,
-            batch_size,
-            num_gpus,
-            num_threads,
-            device_id,
-            crop,
-            upscale_factor,
-            mx_path,
-            mx_index_path,
-            dali_cpu=False,
+        self,
+        *,
+        batch_size,
+        num_gpus,
+        num_threads,
+        device_id,
+        crop,
+        upscale_factor,
+        mx_path,
+        mx_index_path,
+        dali_cpu=False,
     ):
-        super(SRGANVOCPipeline, self).__init__(
-            batch_size, num_threads, device_id
-        )
+        super(SRGANVOCPipeline, self).__init__(batch_size, num_threads, device_id)
         self.input = ops.MXNetReader(
             path=[mx_path],
             index_path=[mx_index_path],

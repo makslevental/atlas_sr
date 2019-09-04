@@ -2,6 +2,7 @@ import math
 
 import torch
 from PIL import Image
+from apex.parallel import SyncBatchNorm
 from torch import nn
 from torchvision.models import vgg16
 from torchvision.transforms import ToTensor, Resize, Compose
@@ -24,6 +25,39 @@ class Generator(nn.Module):
         self.block6 = ResidualBlock(64)
         self.block7 = nn.Sequential(
             nn.Conv2d(64, 64, kernel_size=3, padding=1), nn.BatchNorm2d(64)
+        )
+        block8 = [UpsampleBLock(64, 2) for _ in range(upsample_block_num)]
+        block8.append(nn.Conv2d(64, in_channels, kernel_size=9, padding=4))
+        self.block8 = nn.Sequential(*block8)
+
+    def forward(self, x):
+        block1 = self.block1(x)
+        block2 = self.block2(block1)
+        block3 = self.block3(block2)
+        block4 = self.block4(block3)
+        block5 = self.block5(block4)
+        block6 = self.block6(block5)
+        block7 = self.block7(block6)
+        block8 = self.block8(block1 + block7)
+
+        return (torch.tanh(block8) + 1) / 2
+
+
+class SyncGenerator(nn.Module):
+    def __init__(self, *, scale_factor, in_channels):
+        upsample_block_num = int(math.log(scale_factor, 2))
+
+        super(SyncGenerator, self).__init__()
+        self.block1 = nn.Sequential(
+            nn.Conv2d(in_channels, 64, kernel_size=9, padding=4), nn.PReLU()
+        )
+        self.block2 = SyncResidualBlock(64)
+        self.block3 = SyncResidualBlock(64)
+        self.block4 = SyncResidualBlock(64)
+        self.block5 = SyncResidualBlock(64)
+        self.block6 = SyncResidualBlock(64)
+        self.block7 = nn.Sequential(
+            nn.Conv2d(64, 64, kernel_size=3, padding=1), SyncBatchNorm(64)
         )
         block8 = [UpsampleBLock(64, 2) for _ in range(upsample_block_num)]
         block8.append(nn.Conv2d(64, in_channels, kernel_size=9, padding=4))
@@ -68,6 +102,44 @@ class Discriminator(nn.Module):
             nn.LeakyReLU(0.2),
             nn.Conv2d(512, 512, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(512),
+            nn.LeakyReLU(0.2),
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(512, 1024, kernel_size=1),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(1024, 1, kernel_size=1),
+        )
+
+    def forward(self, x):
+        batch_size = x.size(0)
+        return torch.sigmoid(self.net(x).view(batch_size))
+
+
+class SyncDiscriminator(nn.Module):
+    def __init__(self, *, in_channels):
+        super(SyncDiscriminator, self).__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(in_channels, 64, kernel_size=3, padding=1),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1),
+            SyncBatchNorm(64),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            SyncBatchNorm(128),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1),
+            SyncBatchNorm(128),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(128, 256, kernel_size=3, padding=1),
+            SyncBatchNorm(256),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1),
+            SyncBatchNorm(256),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(256, 512, kernel_size=3, padding=1),
+            SyncBatchNorm(512),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(512, 512, kernel_size=3, stride=2, padding=1),
+            SyncBatchNorm(512),
             nn.LeakyReLU(0.2),
             nn.AdaptiveAvgPool2d(1),
             nn.Conv2d(512, 1024, kernel_size=1),
@@ -126,6 +198,25 @@ class ResidualBlock(nn.Module):
         self.prelu = nn.PReLU()
         self.conv2 = nn.Conv2d(n_feat_maps, n_feat_maps, kernel_size=3, padding=1)
         self.bn2 = nn.BatchNorm2d(n_feat_maps)
+
+    def forward(self, x):
+        residual = self.conv1(x)
+        residual = self.bn1(residual)
+        residual = self.prelu(residual)
+        residual = self.conv2(residual)
+        residual = self.bn2(residual)
+
+        return x + residual
+
+
+class SyncResidualBlock(nn.Module):
+    def __init__(self, n_feat_maps):
+        super(SyncResidualBlock, self).__init__()
+        self.conv1 = nn.Conv2d(n_feat_maps, n_feat_maps, kernel_size=3, padding=1)
+        self.bn1 = SyncBatchNorm(n_feat_maps)
+        self.prelu = nn.PReLU()
+        self.conv2 = nn.Conv2d(n_feat_maps, n_feat_maps, kernel_size=3, padding=1)
+        self.bn2 = SyncBatchNorm(n_feat_maps)
 
     def forward(self, x):
         residual = self.conv1(x)

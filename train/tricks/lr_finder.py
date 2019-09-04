@@ -7,6 +7,8 @@ import torch
 from torch.optim.lr_scheduler import _LRScheduler
 from tqdm import tqdm
 
+from util.util import find_nearest
+
 
 class LRFinder(object):
     """Learning rate range test.
@@ -49,6 +51,7 @@ class LRFinder(object):
             device=None,
             memory_cache=True,
             cache_dir=None,
+            retain_graph=False,
     ):
         self.model = model
         self.optimizer = optimizer
@@ -57,6 +60,7 @@ class LRFinder(object):
         self.best_loss = None
         self.memory_cache = memory_cache
         self.cache_dir = cache_dir
+        self.retain_graph = retain_graph
 
         # Save the original state of the model and optimizer so they can be restored if
         # needed
@@ -125,7 +129,6 @@ class LRFinder(object):
 
         if smooth_f < 0 or smooth_f >= 1:
             raise ValueError("smooth_f is outside the range [0, 1[")
-
         # Create an iterator to get data batch by batch
         iterator = iter(train_loader)
         for iteration in tqdm(range(num_iter)):
@@ -133,6 +136,8 @@ class LRFinder(object):
             try:
                 inputs, labels = next(iterator)
             except StopIteration:
+                if hasattr(train_loader, "reset"):
+                    train_loader.reset()
                 iterator = iter(train_loader)
                 inputs, labels = next(iterator)
 
@@ -171,10 +176,10 @@ class LRFinder(object):
         # Forward pass
         self.optimizer.zero_grad()
         outputs = self.model(inputs)
-        loss = self.criterion(outputs, labels)
+        loss = self.criterion(inputs, outputs, labels)
 
         # Backward pass
-        loss.backward()
+        loss.backward(retain_graph=self.retain_graph)
         self.optimizer.step()
 
         return loss.item()
@@ -191,7 +196,7 @@ class LRFinder(object):
 
                 # Forward pass and loss computation
                 outputs = self.model(inputs)
-                loss = self.criterion(outputs, labels)
+                loss = self.criterion(inputs, outputs, labels)
                 running_loss += loss.item() * inputs.size(0)
 
         return running_loss / len(dataloader.dataset)
@@ -237,10 +242,13 @@ class LRFinder(object):
         except:
             print("Failed to compute the gradients, there might not be enough points.")
             return
-        print(f"Min numerical gradient: {lrs[mg]:.2E}")
-        ax.plot(lrs[mg], losses[mg], markersize=10, marker="o", color="red")
+        print(f"LR @ Min numerical gradient: {lrs[mg]:.2E}")
+        ax.plot(lrs[mg], losses[mg], markersize=10, marker="o", color="red", label="Min numerical gradient")
         ml = np.argmin(losses)
-        print(f"Min loss divided by 10: {lrs[ml] / 10:.2E}")
+        
+        print(f"LR @ Min loss: {lrs[ml]:.2E}")
+        ax.plot(lrs[ml], losses[ml], markersize=10, marker="o", color="green", label="Min loss")
+        ax.legend()
         fig.show()
 
 
