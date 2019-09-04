@@ -176,7 +176,14 @@ def train(netG, netD, optimizerG, optimizerD, generator_loss, train_loader):
         d_loss = 1 - real_out + fake_out
         running_results["d_loss"] += d_loss.item() * batch_size
 
-        print(running_results)
+        print(
+            "\t".join(
+                [
+                    f"d_loss: {d_loss.item()}",
+                    f"g_loss: {g_loss.item()}"
+                ]
+            )
+        )
 
     return running_results
 
