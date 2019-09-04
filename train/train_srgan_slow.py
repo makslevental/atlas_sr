@@ -1,3 +1,4 @@
+import os
 from math import log10
 from os import listdir
 from os.path import join
@@ -262,17 +263,19 @@ def main(
     upscale_factor=2,
     num_epochs=100,
 ):
+    if not os.path.exists(checkpoint_dir):
+        os.mkdir(checkpoint_dir)
     train_set = TrainDatasetFromFolder(
         train_data_dir, crop_size=crop_size, upscale_factor=upscale_factor
     )
     train_loader = DataLoader(
-        dataset=train_set, num_workers=4, batch_size=128, shuffle=True
+        dataset=train_set, num_workers=4, batch_size=64, shuffle=True
     )
     val_set = ValDatasetFromFolder(val_data_dir, upscale_factor=upscale_factor)
     val_loader = DataLoader(dataset=val_set, num_workers=4, batch_size=1, shuffle=False)
 
-    netG = nn.DataParallel(Generator(scale_factor=upscale_factor, in_channels=3))
-    netD = nn.DataParallel(Discriminator(in_channels=3))
+    netG = Generator(scale_factor=upscale_factor, in_channels=3)
+    netD = Discriminator(in_channels=3)
     generator_criterion = GeneratorLoss()
 
     if torch.cuda.is_available():
@@ -328,6 +331,6 @@ if __name__ == "__main__":
         upscale_factor=2,
         train_data_dir="/home/maksim/data/VOC2012/train",
         val_data_dir="/home/maksim/data/VOC2012/val",
-        checkpoint_dir="/home/maksim/dev_projects/atlas_sr/checkpoints/srgan_slow",
-        metrics_csv_fp="/home/maksim/dev_projects/atlas_sr/checkpoints/srgan_slow/metrics.csv",
+        checkpoint_dir="/home/maksim/dev_projects/atlas_sr/checkpoints/srgan_slow_icnr",
+        metrics_csv_fp="/home/maksim/dev_projects/atlas_sr/checkpoints/srgan_slow_icnr/metrics.csv",
     )
