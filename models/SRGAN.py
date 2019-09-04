@@ -144,8 +144,8 @@ class UpsampleBLock(nn.Module):
             in_channels, in_channels * up_scale ** 2, kernel_size=3, padding=1
         )
         self.pixel_shuffle = nn.PixelShuffle(up_scale)
-        # kernel = ICNR(self.conv.weight, upscale_factor=up_scale)
-        # self.conv.weight.data.copy_(kernel)
+        kernel = ICNR(self.conv.weight, upscale_factor=up_scale)
+        self.conv.weight.data.copy_(kernel)
         self.prelu = nn.PReLU()
 
     def forward(self, x):
