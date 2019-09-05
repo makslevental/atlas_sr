@@ -8,7 +8,8 @@ import torch
 import torch.backends.cudnn
 import torch.distributed
 from apex.parallel import DistributedDataParallel as DDP
-from torch.nn.parallel.distributed import DistributedDataParallel
+
+# from torch.nn.parallel.distributed import DistributedDataParallel as DDP
 from torch import nn
 
 from data_utils.dali import StupidDALIIterator, SRGANMXNetPipeline
@@ -75,13 +76,7 @@ if distributed:
     torch.cuda.set_device(gpu)
     torch.distributed.init_process_group(backend="nccl", init_method="env://")
     assert world_size == torch.distributed.get_world_size()
-    lr *= world_size
 
-total_batch_size = world_size * batch_size
-static_loss_scale = 1.0
-dynamic_loss_scale = False
-resume = False
-dali_cpu = False
 print_freq = 10
 
 netG = Generator(scale_factor=upscale_factor, in_channels=3)
@@ -91,8 +86,6 @@ netD = Discriminator(in_channels=3)
 generator_criterion = GeneratorLoss()
 generator_criterion = generator_criterion.cuda()
 if distributed:
-    # shared param/delay all reduce turns off bucketing in DDP, for lower latency runs this can improve perf
-    # for the older version of APEX please use shared_param, for newer one it is delay_allreduce
     netG = netG.cuda(gpu)
     netD = netD.cuda(gpu)
     netG = DDP(netG, delay_allreduce=True)
@@ -119,7 +112,6 @@ train_pipe = SRGANMXNetPipeline(
     num_threads=workers,
     device_id=local_rank,
     crop=crop_size,
-    dali_cpu=False,
     mx_path=train_mx_path,
     mx_index_path=train_mx_index_path,
     upscale_factor=upscale_factor,
@@ -137,7 +129,6 @@ val_pipe = SRGANMXNetPipeline(
     num_threads=workers,
     device_id=local_rank,
     crop=crop_size,
-    dali_cpu=False,
     mx_path=val_mx_path,
     mx_index_path=val_mx_index_path,
     upscale_factor=upscale_factor,
@@ -160,7 +151,7 @@ def train(epoch):
         "d_loss": 0,
         "g_loss": 0,
         "step": "",
-        "batch_time": 0
+        "batch_time": 0,
     }
 
     for i, (lr_image, hr_image) in enumerate(train_loader):
@@ -168,7 +159,7 @@ def train(epoch):
         batch_size = lr_image.shape[0]
         running_results["batch_sizes"] += batch_size
         running_results["step"] = f"{i + 1}/{train_loader.size // batch_size}"
-        #adjust_learning_rate(epoch, i, train_loader.size)
+        adjust_learning_rate(epoch, i, train_loader.size)
 
         if prof and i > 10:
             break
@@ -183,8 +174,8 @@ def train(epoch):
         fake_out = netD(fake_img).mean()
         d_loss = 1 - real_out + fake_out
 
-        if distributed:
-            d_loss = reduce_tensor(d_loss, world_size)
+        # if distributed:
+        #     d_loss = reduce_tensor(d_loss, world_size)
         running_results["d_loss"] += d_loss.item() * batch_size
         d_loss.backward(retain_graph=True)
         optimizerD.step()
@@ -194,8 +185,8 @@ def train(epoch):
         ###########################
         netG.zero_grad()
         g_loss = generator_criterion(fake_out, fake_img, hr_image)
-        if distributed:
-            g_loss = reduce_tensor(g_loss, world_size)
+        # if distributed:
+        #     g_loss = reduce_tensor(g_loss, world_size)
         running_results["g_loss"] += g_loss.item() * batch_size
         g_loss.backward()
         optimizerG.step()
@@ -224,9 +215,9 @@ def validate():
         batch_mse = ((sr_image - hr_image) ** 2).mean()
         batch_ssim = ssim(sr_image, hr_image)
 
-        if distributed:
-            batch_mse = reduce_tensor(batch_mse, world_size)
-            batch_ssim = reduce_tensor(batch_ssim, world_size)
+        # if distributed:
+        #     batch_mse = reduce_tensor(batch_mse, world_size)
+        #     batch_ssim = reduce_tensor(batch_ssim, world_size)
 
         valing_results["mse"] += batch_mse.item() * batch_size
         valing_results["ssims"] += batch_ssim.item() * batch_size
@@ -239,24 +230,18 @@ def validate():
 
 
 def adjust_learning_rate(epoch, step, len_epoch):
-    factor = epoch // 30
-
-    if epoch >= 80:
-        factor = factor + 1
-
-    lr = args.lr * (0.1 ** factor)
-
     """Warmup"""
     if epoch < 5:
-        lr = lr * float(1 + step + epoch * len_epoch) / (5.0 * len_epoch)
+        p = float(1 + step + epoch * len_epoch) / (5.0 * len_epoch)
+        lr = (1 - p) * args.lr + p * world_size * args.lr
 
-    if args.local_rank == 0 and step % print_freq == 0 and step > 1:
-        print("Epoch = {}, step = {}, lr = {}".format(epoch, step, lr))
+        if args.local_rank == 0 and step % print_freq == 0 and step > 1:
+            print("Epoch = {}, step = {}, lr = {}".format(epoch, step, lr))
 
-    for param_group in optimizerG.param_groups:
-        param_group["lr"] = lr
-    for param_group in optimizerD.param_groups:
-        param_group["lr"] = lr
+        for param_group in optimizerG.param_groups:
+            param_group["lr"] = lr
+        for param_group in optimizerD.param_groups:
+            param_group["lr"] = lr
 
 
 def main():
