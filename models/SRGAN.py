@@ -25,7 +25,7 @@ class Generator(nn.Module):
         self.block7 = nn.Sequential(
             nn.Conv2d(64, 64, kernel_size=3, padding=1), nn.BatchNorm2d(64)
         )
-        block8 = [UpsampleBLock(64, 2) for _ in range(upsample_block_num)]
+        block8 = [UpsampleBLock(64, scale_factor) for _ in range(upsample_block_num)]
         block8.append(nn.Conv2d(64, in_channels, kernel_size=9, padding=4))
         self.block8 = nn.Sequential(*block8)
 
@@ -138,14 +138,19 @@ class ResidualBlock(nn.Module):
 
 
 class UpsampleBLock(nn.Module):
-    def __init__(self, in_channels, up_scale):
+    def __init__(self, in_channels, scale_factor):
         super(UpsampleBLock, self).__init__()
         self.conv = nn.Conv2d(
-            in_channels, in_channels * up_scale ** 2, kernel_size=3, padding=1
+            in_channels, in_channels * scale_factor ** 2, kernel_size=3, padding=1
         )
-        self.pixel_shuffle = nn.PixelShuffle(up_scale)
-        kernel = ICNR(self.conv.weight, upscale_factor=up_scale)
-        self.conv.weight.data.copy_(kernel)
+        self.conv = icnr_mine(
+            conv=self.conv,
+            in_channels=in_channels,
+            out_channels=in_channels,
+            kernel_size=3,
+            r=scale_factor
+        )
+        self.pixel_shuffle = nn.PixelShuffle(scale_factor)
         self.prelu = nn.PReLU()
 
     def forward(self, x):
@@ -153,6 +158,20 @@ class UpsampleBLock(nn.Module):
         x = self.pixel_shuffle(x)
         x = self.prelu(x)
         return x
+
+
+def icnr_mine(
+        *, conv, in_channels, out_channels, kernel_size, r, initializer=nn.init.kaiming_normal_
+):
+    # "each pixel [all ~3 channels] only depends on one subkernel set
+    # essentially initialize neighboring subpixels together
+    subkernel = initializer(torch.zeros((out_channels, in_channels, kernel_size, kernel_size)))
+    conv.weight.data.copy_(torch.zeros(conv.weight.shape))
+    for n in range(0, r ** 2):
+        wn_indices = [k * r ** 2 + n for k in range(0, out_channels)]
+        conv.weight.data[wn_indices, :, :, :] = subkernel
+
+    return conv
 
 
 def ICNR(tensor, upscale_factor=2, inizializer=nn.init.kaiming_normal_):
@@ -218,10 +237,10 @@ class GeneratorLoss(nn.Module):
         # TV Loss
         tv_loss = self.tv_loss(out_images)
         return (
-            image_loss
-            + 0.001 * adversarial_loss
-            + 0.006 * perception_loss
-            + 2e-8 * tv_loss
+                image_loss
+                + 0.001 * adversarial_loss
+                + 0.006 * perception_loss
+                + 2e-8 * tv_loss
         )
 
 
@@ -297,7 +316,34 @@ def count():
     print("4x4 kernel discriminator", count_parameters(dfat))
 
 
+def icnr():
+    ci = 2
+    r = 2
+    out_channels = 3
+    co = out_channels * r ** 2
+    kernel_size = 3
+
+    # figure out the Wn groups
+    W = torch.empty(
+        nn.Conv2d(in_channels=ci, out_channels=co, kernel_size=kernel_size).weight.shape
+    )
+    for n in range(0, r ** 2):
+        for k in range(0, co // r ** 2):
+            j = k * r ** 2 + n
+            W[j, :, :, :] = n
+    # print(W)
+    c = nn.Conv2d(in_channels=ci, out_channels=co, kernel_size=kernel_size)
+    c = icnr_mine(
+        conv=c, in_channels=ci, out_channels=out_channels, kernel_size=kernel_size, r=r
+    )
+    print(c.weight)
+    c1 = nn.Conv2d(in_channels=ci, out_channels=co, kernel_size=kernel_size)
+    kernel = ICNR(c1.weight, upscale_factor=r)
+    c1.weight.data.copy_(kernel)
+    print(c1.weight)
+
+
 if __name__ == "__main__":
     # test_gray()
     # upsample()
-    count()
+    icnr()

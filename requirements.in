@@ -12,3 +12,4 @@ mxnet
 pip-tools
 scipy
 opencv-python
+GitPython

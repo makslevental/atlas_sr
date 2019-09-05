@@ -8,13 +8,15 @@ import torch
 import torch.backends.cudnn
 import torch.distributed
 from apex.parallel import DistributedDataParallel as DDP
+from torch.nn.parallel.distributed import DistributedDataParallel
 from torch import nn
 
 from data_utils.dali import StupidDALIIterator, SRGANMXNetPipeline
 from metrics.metrics import AverageMeter
 from metrics.ssim import ssim
 from models.SRGAN import Generator, Discriminator, GeneratorLoss
-from util.util import reduce_tensor
+from util.util import reduce_tensor, snapshot
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--local_rank", default=0, type=int)
@@ -59,6 +61,8 @@ if local_rank == 0:
     checkpoint_dir = os.path.join(checkpoint_dir, experiment_name)
     if not os.path.exists(checkpoint_dir):
         os.mkdir(checkpoint_dir)
+
+snapshot(checkpoint_dir)
 
 distributed = False
 world_size = 1
