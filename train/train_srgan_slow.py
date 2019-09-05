@@ -141,7 +141,7 @@ def train(netG, netD, optimizerG, optimizerD, generator_loss, train_loader):
 
     running_results = {"batch_sizes": 0, "d_loss": 0, "g_loss": 0}
 
-    for lr_image, hr_image in train_loader:
+    for i, (lr_image, hr_image) in enumerate(train_loader):
         batch_size = lr_image.size(0)
         running_results["batch_sizes"] += batch_size
 
@@ -265,14 +265,15 @@ def main(
 ):
     if not os.path.exists(checkpoint_dir):
         os.mkdir(checkpoint_dir)
+    batch_size = 64
     train_set = TrainDatasetFromFolder(
         train_data_dir, crop_size=crop_size, upscale_factor=upscale_factor
     )
     train_loader = DataLoader(
-        dataset=train_set, num_workers=4, batch_size=64, shuffle=True
+        dataset=train_set, num_workers=4, batch_size=batch_size, shuffle=True, pin_memory=True
     )
     val_set = ValDatasetFromFolder(val_data_dir, upscale_factor=upscale_factor)
-    val_loader = DataLoader(dataset=val_set, num_workers=4, batch_size=1, shuffle=False)
+    val_loader = DataLoader(dataset=val_set, num_workers=4, batch_size=1, shuffle=False, pin_memory=True)
 
     netG = Generator(scale_factor=upscale_factor, in_channels=3)
     netD = Discriminator(in_channels=3)
