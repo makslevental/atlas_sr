@@ -148,7 +148,7 @@ class UpsampleBLock(nn.Module):
             in_channels=in_channels,
             out_channels=in_channels,
             kernel_size=3,
-            r=scale_factor
+            r=scale_factor,
         )
         self.pixel_shuffle = nn.PixelShuffle(scale_factor)
         self.prelu = nn.PReLU()
@@ -161,11 +161,19 @@ class UpsampleBLock(nn.Module):
 
 
 def icnr_mine(
-        *, conv, in_channels, out_channels, kernel_size, r, initializer=nn.init.kaiming_normal_
+    *,
+    conv,
+    in_channels,
+    out_channels,
+    kernel_size,
+    r,
+    initializer=nn.init.kaiming_normal_
 ):
     # "each pixel [all ~3 channels] only depends on one subkernel set
     # essentially initialize neighboring subpixels together
-    subkernel = initializer(torch.zeros((out_channels, in_channels, kernel_size, kernel_size)))
+    subkernel = initializer(
+        torch.zeros((out_channels, in_channels, kernel_size, kernel_size))
+    )
     conv.weight.data.copy_(torch.zeros(conv.weight.shape))
     for n in range(0, r ** 2):
         wn_indices = [k * r ** 2 + n for k in range(0, out_channels)]
@@ -237,10 +245,10 @@ class GeneratorLoss(nn.Module):
         # TV Loss
         tv_loss = self.tv_loss(out_images)
         return (
-                image_loss
-                + 0.001 * adversarial_loss
-                + 0.006 * perception_loss
-                + 2e-8 * tv_loss
+            image_loss
+            + 0.001 * adversarial_loss
+            + 0.006 * perception_loss
+            + 2e-8 * tv_loss
         )
 
 
