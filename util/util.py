@@ -1,6 +1,9 @@
 import gc
+import json
 import os
 import re
+import sys
+import zipfile
 from collections import OrderedDict
 from itertools import zip_longest
 from pathlib import Path
@@ -8,6 +11,7 @@ from typing import NamedTuple, Any, List, Callable, Collection, Union, Optional
 
 import numpy as np
 import torch
+from git import Repo
 from torch import Tensor, nn
 from torch.nn import ModuleList
 from torch.nn.parallel import DistributedDataParallel
@@ -223,6 +227,36 @@ def reduce_tensor(tensor, world_size):
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+def snapshot(snapshot_dir):
+    p = os.path.split(__file__)[0]
+    while ".git" not in os.listdir(p):
+        p = os.path.split(p)[0]
+
+    repo = Repo(p)
+    fps = sorted(
+        [
+            os.path.join(p, fp)
+            for fp in repo.git.ls_files().split() + repo.untracked_files
+        ]
+    )
+
+    zipf = zipfile.ZipFile(
+        os.path.join(snapshot_dir, "snapshot.zip"), "w", zipfile.ZIP_DEFLATED
+    )
+    for fp in fps:
+        zipf.write(fp)
+
+    env = dict(os.environ)
+    env["args"] = sys.argv
+    zipf.writestr("env.txt", json.dumps(env, indent=4))
+
+    zipf.close()
+
+
+if __name__ == "__main__":
+    snapshot("/tmp")
 
 
 def monkey_patch_bn():

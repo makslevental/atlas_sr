@@ -1,9 +1,11 @@
 import math
 
+import matplotlib.pyplot as plt
 import torch
 from PIL import Image
 from apex.parallel import SyncBatchNorm
 from torch import nn
+from torch.nn import PixelShuffle
 from torchvision.models import vgg16
 from torchvision.transforms import ToTensor, Resize, Compose
 
@@ -26,7 +28,7 @@ class Generator(nn.Module):
         self.block7 = nn.Sequential(
             nn.Conv2d(64, 64, kernel_size=3, padding=1), nn.BatchNorm2d(64)
         )
-        block8 = [UpsampleBLock(64, 2) for _ in range(upsample_block_num)]
+        block8 = [UpsampleBLock(64, scale_factor) for _ in range(upsample_block_num)]
         block8.append(nn.Conv2d(64, in_channels, kernel_size=9, padding=4))
         self.block8 = nn.Sequential(*block8)
 
@@ -229,13 +231,13 @@ class SyncResidualBlock(nn.Module):
 
 
 class UpsampleBLock(nn.Module):
-    def __init__(self, in_channels, up_scale):
+    def __init__(self, in_channels, scale_factor):
         super(UpsampleBLock, self).__init__()
         self.conv = nn.Conv2d(
-            in_channels, in_channels * up_scale ** 2, kernel_size=3, padding=1
+            in_channels, in_channels * scale_factor ** 2, kernel_size=3, padding=1
         )
-        self.pixel_shuffle = nn.PixelShuffle(up_scale)
-        kernel = ICNR(self.conv.weight, upscale_factor=up_scale)
+        self.pixel_shuffle = nn.PixelShuffle((scale_factor))
+        kernel = ICNR(self.conv.weight, upscale_factor=scale_factor)
         self.conv.weight.data.copy_(kernel)
         self.prelu = nn.PReLU()
 
@@ -244,6 +246,27 @@ class UpsampleBLock(nn.Module):
         x = self.pixel_shuffle(x)
         x = self.prelu(x)
         return x
+
+
+def icnr_mine(
+        *,
+        conv,
+        in_channels,
+        out_channels,
+        kernel_size,
+        r,
+        initializer=nn.init.kaiming_normal_
+):
+    # make all of the colors of a "superpixel" the same
+    subkernel = initializer(
+        torch.zeros((out_channels, in_channels, kernel_size, kernel_size))
+    )
+    conv.weight.data.copy_(torch.zeros(conv.weight.shape))
+    for n in range(0, r ** 2):
+        wn_indices = [k * r ** 2 + n for k in range(0, out_channels)]
+        conv.weight.data[wn_indices, :, :, :] = subkernel
+
+    return conv
 
 
 def ICNR(tensor, upscale_factor=2, inizializer=nn.init.kaiming_normal_):
@@ -288,10 +311,10 @@ class GeneratorLoss(nn.Module):
         # TV Loss
         tv_loss = self.tv_loss(out_images)
         return (
-            image_loss
-            + 0.001 * adversarial_loss
-            + 0.006 * perception_loss
-            + 2e-8 * tv_loss
+                image_loss
+                + 0.001 * adversarial_loss
+                + 0.006 * perception_loss
+                + 2e-8 * tv_loss
         )
 
 
@@ -367,7 +390,67 @@ def count():
     print("4x4 kernel discriminator", count_parameters(dfat))
 
 
+def icnr_init(x, scale=2, init=nn.init.kaiming_normal_):
+    "ICNR init of `x`, with `scale` and `init` function"
+    ni, nf, h, w = x.shape
+    ni2 = int(ni / (scale ** 2))
+    k = init(x.new_zeros([ni2, nf, h, w])).transpose(0, 1)
+    k = k.contiguous().view(ni2, nf, -1)
+    k = k.repeat(1, 1, scale ** 2)
+    return k.contiguous().view([nf, ni, h, w]).transpose(0, 1)
+
+
+def icnr():
+    torch.set_printoptions(linewidth=1000)
+    ci = 1
+    r = 2
+    out_channels = 1
+    co = out_channels * r ** 2
+    kernel_size = 3
+    # figure out the Wn groups
+    with torch.no_grad():
+        c = nn.Conv2d(in_channels=ci, out_channels=co, kernel_size=kernel_size, padding=1, bias=False)
+        print("Wn")
+        W = torch.empty(c.weight.shape)
+        # for n in range(0, r ** 2):
+        #     for k in range(0, co // r ** 2):
+        #         j = k * r ** 2 + n
+        #         W[j, :, :, :] = n
+        n = 1
+        for i in range(kernel_size):
+            for j in range(kernel_size):
+                W[:, :, i, j] = n
+                n += 1
+        c.weight.data.copy_(W)
+        print(c.weight)
+        t = torch.ones((1, 2, 4, 4))
+        # tt = c(t)
+        # print(tt.shape, tt)
+        ps = PixelShuffle(r)
+        # ttt = ps(tt)
+        # print(ttt.shape)
+        # print(ttt)
+        c = nn.Conv2d(in_channels=2, out_channels=co, kernel_size=kernel_size, padding=1, bias=False)
+        # print(c.weight.shape, c.weight)
+        tst = icnr_init(c.weight)
+        print(tst)
+        c.weight.copy_(tst)
+        tttt = c(t)
+        # print(tttt)
+        print(ps(tttt))
+        c = nn.Conv2d(in_channels=2, out_channels=co, kernel_size=kernel_size, padding=1, bias=False)
+        tttt = c(t)
+        plt.matshow(ps(tttt).squeeze(0).squeeze(0))
+        plt.show()
+        icnr_mine(conv=c, in_channels=2, out_channels=out_channels, kernel_size=kernel_size, r=r)
+        tttt = c(t)
+        print(ps(tttt))
+        plt.matshow(ps(tttt).squeeze(0).squeeze(0))
+        plt.show()
+
+
+
 if __name__ == "__main__":
     # test_gray()
     # upsample()
-    count()
+    icnr()

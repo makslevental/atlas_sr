@@ -17,7 +17,7 @@ from metrics.metrics import AverageMeter
 from metrics.ssim import ssim
 from models.SRGAN import Generator, Discriminator, GeneratorLoss
 from train.tricks.lr_finder import LRFinder
-from util.util import monkey_patch_bn, reduce_tensor, convert_sync_batchnorm
+from util.util import monkey_patch_bn, reduce_tensor, convert_sync_batchnorm, snapshot
 
 monkey_patch_bn()
 
@@ -92,6 +92,8 @@ if local_rank == 0:
     checkpoint_dir = os.path.join(checkpoint_dir, experiment_name)
     if not os.path.exists(checkpoint_dir):
         os.mkdir(checkpoint_dir)
+
+snapshot(checkpoint_dir)
 
 if "WORLD_SIZE" in os.environ:
     world_size = int(os.environ["WORLD_SIZE"])
