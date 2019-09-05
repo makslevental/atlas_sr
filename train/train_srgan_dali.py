@@ -22,19 +22,19 @@ from util.util import monkey_patch_bn, reduce_tensor, convert_sync_batchnorm, sn
 monkey_patch_bn()
 
 parser = argparse.ArgumentParser()
-# script params
-parser.add_argument("--local_rank", default=0, type=int)
-parser.add_argument("--use-apex", action="store_true", default=False)
-parser.add_argument("--experiment-name", type=str, default="test")
-parser.add_argument("--workers", type=int, default=4)
-parser.add_argument("--prof", action="store_true", default=False)
-
 # paths
 parser.add_argument("--train-mx-path")
 parser.add_argument("--train-mx-index-path")
 parser.add_argument("--val-mx-path")
 parser.add_argument("--val-mx-index-path")
 parser.add_argument("--checkpoint-dir")
+
+# script params
+parser.add_argument("--local_rank", default=0, type=int)
+parser.add_argument("--use-apex", action="store_true", default=False)
+parser.add_argument("--experiment-name", type=str, default="test")
+parser.add_argument("--workers", type=int, default=4)
+parser.add_argument("--prof", action="store_true", default=False)
 
 # hyperparams
 parser.add_argument("--use-syncbn", action="store_true", default=False)
@@ -301,6 +301,39 @@ running_meters = {
 }
 
 
+def main():
+    for epoch in range(epochs):
+        start = time.time()
+        train(epoch)
+        validate(epoch)
+        if local_rank == 0:
+            torch.save(
+                netG.state_dict(),
+                f"{checkpoint_dir}/netG_epoch_{upscale_factor}_{epoch}.pth",
+            )
+            torch.save(
+                netD.state_dict(),
+                f"{checkpoint_dir}/netD_epoch_{upscale_factor}_{epoch}.pth",
+            )
+            epoch_time_meter.update(time.time() - start)
+            update_running_meters()
+            if epoch != 0 and not prof:
+                data_frame = pd.DataFrame(data=running_meters)
+                data_frame.to_csv(
+                    os.path.join(checkpoint_dir, "metrics.csv"), index_label="Epoch"
+                )
+
+        val_loader.reset()
+        train_loader.reset()
+
+
+if __name__ == "__main__":
+    main()
+    # find_lr()
+
+# utility functions
+
+
 def update_running_meters():
     global running_meters
     running_meters["g_loss"].append(g_loss_meter.avg)
@@ -360,34 +393,3 @@ def adjust_learning_rate(optimizer, epoch, step, len_epoch, beg_lr, end_lr, n_ep
 
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
-
-
-def main():
-    for epoch in range(epochs):
-        start = time.time()
-        train(epoch)
-        validate(epoch)
-        if local_rank == 0:
-            torch.save(
-                netG.state_dict(),
-                f"{checkpoint_dir}/netG_epoch_{upscale_factor}_{epoch}.pth",
-            )
-            torch.save(
-                netD.state_dict(),
-                f"{checkpoint_dir}/netD_epoch_{upscale_factor}_{epoch}.pth",
-            )
-            epoch_time_meter.update(time.time() - start)
-            update_running_meters()
-            if epoch != 0 and not prof:
-                data_frame = pd.DataFrame(data=running_meters)
-                data_frame.to_csv(
-                    os.path.join(checkpoint_dir, "metrics.csv"), index_label="Epoch"
-                )
-
-        val_loader.reset()
-        train_loader.reset()
-
-
-if __name__ == "__main__":
-    main()
-    # find_lr()
