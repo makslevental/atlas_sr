@@ -164,7 +164,7 @@ def grouper(iterable, n, fillvalue=None):
 
 
 def save_model(
-        file_path: Union[Path, str], model: nn.Module, opt: Optional[Optimizer] = None
+    file_path: Union[Path, str], model: nn.Module, opt: Optional[Optimizer] = None
 ):
     if rank_distrib():
         return  # don't save if slave proc
@@ -194,13 +194,13 @@ def get_model(model: nn.Module):
 
 
 def load_model_state(
-        *,
-        model: nn.Module,
-        file_path: Union[Path, str],
-        device: torch.device,
-        opt: Optional[Optimizer] = None,
-        strict: bool = True,
-        remove_module: bool = False,
+    *,
+    model: nn.Module,
+    file_path: Union[Path, str],
+    device: torch.device,
+    opt: Optional[Optimizer] = None,
+    strict: bool = True,
+    remove_module: bool = False,
 ):
     source = f"{file_path}"
     state = torch.load(source, map_location=device)
@@ -216,7 +216,7 @@ def load_model_state(
 
 def reduce_tensor(tensor, world_size):
     rt = tensor.clone()
-    all_reduce(rt)
+    all_reduce(rt, op=torch.distributed.ReduceOp.SUM)
     rt /= world_size
     return rt
 
@@ -228,21 +228,81 @@ def count_parameters(model):
 def monkey_patch_bn():
     # https://discuss.pytorch.org/t/training-performance-degrades-with-distributeddataparallel/47152
     # print(inspect.getsource(torch.nn.functional.batch_norm))
-    def batch_norm(input, running_mean, running_var, weight=None, bias=None,
-                   training=False, momentum=0.1, eps=1e-5):
+    def batch_norm(
+        input,
+        running_mean,
+        running_var,
+        weight=None,
+        bias=None,
+        training=False,
+        momentum=0.1,
+        eps=1e-5,
+    ):
         if training:
             size = input.size()
             size_prods = size[0]
             for i in range(len(size) - 2):
                 size_prods *= size[i + 2]
             if size_prods == 1:
-                raise ValueError('Expected more than 1 value per channel when training, got input size {}'.format(size))
+                raise ValueError(
+                    "Expected more than 1 value per channel when training, got input size {}".format(
+                        size
+                    )
+                )
 
         return torch.batch_norm(
-            input, weight, bias, running_mean, running_var,
-            training, momentum, eps, False
+            input,
+            weight,
+            bias,
+            running_mean,
+            running_var,
+            training,
+            momentum,
+            eps,
+            False,
         )
 
     torch.nn.functional.batch_norm = batch_norm
     # print(inspect.getsource(torch.nn.functional.batch_norm))
 
+
+def accuracy(output, target, topk=(1,)):
+    """Computes the precision@k for the specified values of k"""
+    maxk = max(topk)
+    batch_size = target.size(0)
+
+    _, pred = output.topk(maxk, 1, True, True)
+    pred = pred.t()
+    correct = pred.eq(target.view(1, -1).expand_as(pred))
+
+    res = []
+    for k in topk:
+        correct_k = correct[:k].view(-1).float().sum(0, keepdim=True)
+        res.append(correct_k.mul_(100.0 / batch_size))
+    return res
+
+
+def convert_sync_batchnorm(cls, module, process_group=None):
+    module_output = module
+    if isinstance(module, torch.nn.modules.batchnorm._BatchNorm):
+        module_output = torch.nn.SyncBatchNorm(
+            module.num_features,
+            module.eps,
+            module.momentum,
+            module.affine,
+            module.track_running_stats,
+            process_group,
+        )
+        if module.affine:
+            module_output.weight.data = module.weight.data.clone().detach()
+            module_output.bias.data = module.bias.data.clone().detach()
+            # keep reuqires_grad unchanged
+            module_output.weight.requires_grad = module.weight.requires_grad
+            module_output.bias.requires_grad = module.bias.requires_grad
+        module_output.running_mean = module.running_mean
+        module_output.running_var = module.running_var
+        module_output.num_batches_tracked = module.num_batches_tracked
+    for name, child in module.named_children():
+        module_output.add_module(name, convert_sync_batchnorm(cls, child, process_group))
+    del module
+    return module_output

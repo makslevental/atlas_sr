@@ -7,23 +7,29 @@ import pandas as pd
 import torch
 import torch.backends.cudnn
 import torch.distributed
+from apex.parallel import DistributedDataParallel, SyncBatchNorm as ApexSyncBatchNorm
 from nvidia.dali import types
 from torch import nn
-from torch.autograd import Variable
+from torch.nn import SyncBatchNorm as TorchSyncBatchNorm
 
 from data_utils.dali import StupidDALIIterator, SRGANMXNetPipeline
 from metrics.metrics import AverageMeter
 from metrics.ssim import ssim
 from models.SRGAN import Generator, Discriminator, GeneratorLoss
 from train.tricks.lr_finder import LRFinder
-from util.util import monkey_patch_bn
+from util.util import monkey_patch_bn, reduce_tensor, convert_sync_batchnorm
 
 monkey_patch_bn()
 
 parser = argparse.ArgumentParser()
+# script params
 parser.add_argument("--local_rank", default=0, type=int)
-parser.add_argument("--channels", type=int, default=3)
+parser.add_argument("--use-apex", action="store_true", default=False)
 parser.add_argument("--experiment-name", type=str, default="test")
+parser.add_argument("--workers", type=int, default=4)
+parser.add_argument("--prof", action="store_true", default=False)
+
+# paths
 parser.add_argument(
     "--train-mx-path", default="/home/maksim/data/VOC2012/voc_train.rec"
 )
@@ -35,32 +41,39 @@ parser.add_argument(
     "--val-mx-index-path", default="/home/maksim/data/VOC2012/voc_val.idx"
 )
 parser.add_argument("--checkpoint-dir", default="/home/maksim/data/checkpoints")
+
+# hyperparams
+parser.add_argument("--use-syncbn", action="store_true", default=False)
+parser.add_argument("--channels", type=int, default=3)
 parser.add_argument("--upscale-factor", type=int, default=2)
 parser.add_argument("--epochs", type=int, default=100)
 parser.add_argument("--batch-size", type=int, default=128)
-parser.add_argument("--prof", action="store_true", default=False)
 parser.add_argument("--g-lr", type=float, default=1e-3)
 parser.add_argument("--d-lr", type=float, default=1e-3)
 parser.add_argument("--crop-size", type=int, default=88)
-parser.add_argument("--workers", type=int, default=4)
 
 args = parser.parse_args()
 local_rank = args.local_rank
+experiment_name = args.experiment_name
+use_apex = args.use_apex
+prof = args.prof
+
 train_mx_path = args.train_mx_path
 train_mx_index_path = args.train_mx_index_path
 val_mx_path = args.val_mx_path
 val_mx_index_path = args.val_mx_index_path
-experiment_name = args.experiment_name
 checkpoint_dir = args.checkpoint_dir
+
+use_syncbn = args.use_syncbn
+channels = args.channels
 upscale_factor = args.upscale_factor
 epochs = args.epochs
 batch_size = args.batch_size
-crop_size = args.crop_size
-prof = args.prof
 workers = args.workers
 g_lr = args.g_lr
 d_lr = args.d_lr
-channels = args.channels
+crop_size = args.crop_size
+
 print_freq = 10
 
 assert os.path.exists(train_mx_path)
@@ -72,6 +85,8 @@ assert os.path.exists(checkpoint_dir)
 
 distributed = False
 world_size = 1
+
+print(f"GPU {local_rank} reporting for duty")
 
 if local_rank == 0:
     checkpoint_dir = os.path.join(checkpoint_dir, experiment_name)
@@ -85,29 +100,32 @@ if "WORLD_SIZE" in os.environ:
 netG = Generator(scale_factor=upscale_factor, in_channels=channels)
 netD = Discriminator(in_channels=channels)
 g = GeneratorLoss()
+netG.cuda(local_rank)
+netD.cuda(local_rank)
+g.cuda(local_rank)
+
 if distributed:
-    gpu = local_rank % torch.cuda.device_count()
-    torch.cuda.set_device(gpu)
+    torch.cuda.set_device(local_rank)
     torch.distributed.init_process_group(backend="nccl", init_method="env://")
     assert world_size == torch.distributed.get_world_size()
-    netG = nn.SyncBatchNorm.convert_sync_batchnorm(netG)
-    netD = nn.SyncBatchNorm.convert_sync_batchnorm(netD)
-    netG.cuda(gpu)
-    netD.cuda(gpu)
-    g.cuda(gpu)
-    netG = nn.parallel.DistributedDataParallel(netG, device_ids=[gpu])
-    netD = nn.parallel.DistributedDataParallel(netD, device_ids=[gpu])
-    g_lr /= world_size
-    d_lr /= world_size
-    print(f"new g_lr: {g_lr} new d_lr: {d_lr}")
+    if use_apex:
+        if use_syncbn:
+            netG = convert_sync_batchnorm(ApexSyncBatchNorm, netG)
+            netD = convert_sync_batchnorm(ApexSyncBatchNorm, netD)
+        netG = DistributedDataParallel(netG, delay_allreduce=True)
+        netD = DistributedDataParallel(netD, delay_allreduce=True)
+    else:
+        if use_syncbn:
+            netG = convert_sync_batchnorm(TorchSyncBatchNorm, netG)
+            netD = convert_sync_batchnorm(TorchSyncBatchNorm, netD)
+        netG = nn.parallel.DistributedDataParallel(netG, device_ids=[local_rank])
+        netD = nn.parallel.DistributedDataParallel(netD, device_ids=[local_rank])
 else:
     netG = Generator(scale_factor=upscale_factor, in_channels=channels)
     netD = Discriminator(in_channels=channels)
     netG = nn.DataParallel(netG)
     netD = nn.DataParallel(netD)
-    netG = netG.cuda()
-    netD = netD.cuda()
-    g = g.cuda()
+
 
 # because vgg excepts 3 channels
 if channels == 1:
@@ -121,6 +139,8 @@ else:
 
 optimizerG = torch.optim.Adam(netG.parameters(), lr=g_lr)
 optimizerD = torch.optim.Adam(netD.parameters(), lr=d_lr)
+# optimizerG = torch.optim.SGD(netG.parameters(), g_lr, momentum=0.9, weight_decay=1e-4)
+# optimizerD = torch.optim.SGD(netD.parameters(), d_lr, momentum=0.9, weight_decay=1e-4)
 
 train_pipe = SRGANMXNetPipeline(
     batch_size=batch_size,
@@ -141,7 +161,7 @@ train_loader = StupidDALIIterator(
     auto_reset=False,
 )
 val_pipe = SRGANMXNetPipeline(
-    batch_size=1,
+    batch_size=batch_size,
     num_gpus=world_size,
     num_threads=workers,
     device_id=local_rank,
@@ -176,6 +196,13 @@ def train(epoch):
         start = time.time()
         batch_size = lr_image.shape[0]
 
+        adjust_learning_rate(
+            optimizerD, epoch, i, train_loader.size, args.d_lr, args.d_lr * world_size
+        )
+        adjust_learning_rate(
+            optimizerG, epoch, i, train_loader.size, args.g_lr, args.g_lr * world_size
+        )
+
         if prof and i > 10:
             break
 
@@ -198,8 +225,13 @@ def train(epoch):
         g_loss.backward()
         optimizerG.step()
 
-        d_loss_meter.update(d_loss.item())
-        g_loss_meter.update(g_loss.item())
+        if distributed:
+            d_loss_meter.update(reduce_tensor(d_loss.data, world_size).item())
+            g_loss_meter.update(reduce_tensor(g_loss.data, world_size).item())
+        else:
+            d_loss_meter.update(d_loss.item())
+            g_loss_meter.update(g_loss.item())
+
         sample_speed_meter.update(world_size * batch_size / (time.time() - start))
 
         if local_rank == 0 and i % print_freq == 0:
@@ -237,8 +269,12 @@ def validate(epoch):
         batch_mse = ((sr_image - hr_image) ** 2).mean()
         batch_ssim = ssim(sr_image, hr_image)
 
-        mse_meter.update(batch_mse.item(), batch_size)
-        ssim_meter.update(batch_ssim.item(), batch_size)
+        if distributed:
+            mse_meter.update(reduce_tensor(batch_mse.data, world_size), batch_size)
+            ssim_meter.update(reduce_tensor(batch_ssim.data, world_size), batch_size)
+        else:
+            mse_meter.update(batch_mse.item(), batch_size)
+            ssim_meter.update(batch_ssim.item(), batch_size)
 
     psnr_meter.update(10 * log10(1 / mse_meter.avg))
 
@@ -314,6 +350,20 @@ def find_lr():
     lr_finder_d = LRFinder(netD, optimizerD, one_round_d, retain_graph=True)
     lr_finder_d.range_test(train_loader)
     lr_finder_d.plot()
+
+
+def adjust_learning_rate(optimizer, epoch, step, len_epoch, beg_lr, end_lr, n_epochs=5):
+    if epoch < n_epochs:
+        p = (1.0 + step + epoch * len_epoch) / (n_epochs * len_epoch)
+        lr = (1 - p) * beg_lr + p * end_lr
+
+        if args.local_rank == 0 and step % print_freq == 0 and step > 1:
+            print(
+                f"Epoch = {epoch}, step = {step}, {type(optimizer).__name__} lr = {lr}"
+            )
+
+        for param_group in optimizer.param_groups:
+            param_group["lr"] = lr
 
 
 def main():
