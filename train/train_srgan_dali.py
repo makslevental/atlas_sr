@@ -30,17 +30,11 @@ parser.add_argument("--workers", type=int, default=4)
 parser.add_argument("--prof", action="store_true", default=False)
 
 # paths
-parser.add_argument(
-    "--train-mx-path", default="/home/maksim/data/VOC2012/voc_train.rec"
-)
-parser.add_argument(
-    "--train-mx-index-path", default="/home/maksim/data/VOC2012/voc_train.idx"
-)
-parser.add_argument("--val-mx-path", default="/home/maksim/data/VOC2012/voc_val.rec")
-parser.add_argument(
-    "--val-mx-index-path", default="/home/maksim/data/VOC2012/voc_val.idx"
-)
-parser.add_argument("--checkpoint-dir", default="/home/maksim/data/checkpoints")
+parser.add_argument("--train-mx-path")
+parser.add_argument("--train-mx-index-path")
+parser.add_argument("--val-mx-path")
+parser.add_argument("--val-mx-index-path")
+parser.add_argument("--checkpoint-dir")
 
 # hyperparams
 parser.add_argument("--use-syncbn", action="store_true", default=False)
