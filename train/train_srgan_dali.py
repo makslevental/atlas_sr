@@ -122,7 +122,6 @@ else:
     netG = nn.DataParallel(netG)
     netD = nn.DataParallel(netD)
 
-
 # because vgg excepts 3 channels
 if channels == 1:
     generator_loss = lambda fake_out, fake_img, hr_image: g(
@@ -288,63 +287,6 @@ def validate(epoch):
         )
 
 
-epoch_time_meter = AverageMeter("epoch")
-
-running_meters = {
-    "g_loss": [],
-    "d_loss": [],
-    "sample_speed": [],
-    "mse": [],
-    "ssim": [],
-    "psnr": [],
-    "epoch_time": [],
-}
-
-
-def main():
-    for epoch in range(epochs):
-        start = time.time()
-        train(epoch)
-        validate(epoch)
-        if local_rank == 0:
-            torch.save(
-                netG.state_dict(),
-                f"{checkpoint_dir}/netG_epoch_{upscale_factor}_{epoch}.pth",
-            )
-            torch.save(
-                netD.state_dict(),
-                f"{checkpoint_dir}/netD_epoch_{upscale_factor}_{epoch}.pth",
-            )
-            epoch_time_meter.update(time.time() - start)
-            update_running_meters()
-            if epoch != 0 and not prof:
-                data_frame = pd.DataFrame(data=running_meters)
-                data_frame.to_csv(
-                    os.path.join(checkpoint_dir, "metrics.csv"), index_label="Epoch"
-                )
-
-        val_loader.reset()
-        train_loader.reset()
-
-
-if __name__ == "__main__":
-    main()
-    # find_lr()
-
-# utility functions
-
-
-def update_running_meters():
-    global running_meters
-    running_meters["g_loss"].append(g_loss_meter.avg)
-    running_meters["d_loss"].append(d_loss_meter.avg)
-    running_meters["sample_speed"].append(sample_speed_meter.avg)
-    running_meters["mse"].append(mse_meter.avg)
-    running_meters["ssim"].append(ssim_meter.avg)
-    running_meters["psnr"].append(psnr_meter.avg)
-    running_meters["epoch_time"].append(epoch_time_meter.val)
-
-
 def find_lr():
     print("find learning rates")
 
@@ -393,3 +335,58 @@ def adjust_learning_rate(optimizer, epoch, step, len_epoch, beg_lr, end_lr, n_ep
 
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
+
+
+epoch_time_meter = AverageMeter("epoch")
+
+running_meters = {
+    "g_loss": [],
+    "d_loss": [],
+    "sample_speed": [],
+    "mse": [],
+    "ssim": [],
+    "psnr": [],
+    "epoch_time": [],
+}
+
+
+def update_running_meters():
+    global running_meters
+    running_meters["g_loss"].append(g_loss_meter.avg)
+    running_meters["d_loss"].append(d_loss_meter.avg)
+    running_meters["sample_speed"].append(sample_speed_meter.avg)
+    running_meters["mse"].append(mse_meter.avg)
+    running_meters["ssim"].append(ssim_meter.avg)
+    running_meters["psnr"].append(psnr_meter.avg)
+    running_meters["epoch_time"].append(epoch_time_meter.val)
+
+
+def main():
+    for epoch in range(epochs):
+        start = time.time()
+        train(epoch)
+        validate(epoch)
+        if local_rank == 0:
+            torch.save(
+                netG.state_dict(),
+                f"{checkpoint_dir}/netG_epoch_{upscale_factor}_{epoch}.pth",
+            )
+            torch.save(
+                netD.state_dict(),
+                f"{checkpoint_dir}/netD_epoch_{upscale_factor}_{epoch}.pth",
+            )
+            epoch_time_meter.update(time.time() - start)
+            update_running_meters()
+            if epoch != 0 and not prof:
+                data_frame = pd.DataFrame(data=running_meters)
+                data_frame.to_csv(
+                    os.path.join(checkpoint_dir, "metrics.csv"), index_label="Epoch"
+                )
+
+        val_loader.reset()
+        train_loader.reset()
+
+
+if __name__ == "__main__":
+    main()
+    # find_lr()
