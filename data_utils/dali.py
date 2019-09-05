@@ -1,6 +1,14 @@
+import glob
+import os
+
+import matplotlib.pyplot as plt
+import numpy as np
+
 import nvidia.dali.ops as ops
 import nvidia.dali.types as types
 import torch
+from PIL import Image
+from matplotlib import gridspec
 from nvidia.dali.pipeline import Pipeline
 from nvidia.dali.plugin.pytorch import DALIGenericIterator
 
@@ -263,3 +271,76 @@ class SRGANVOCPipeline(Pipeline):
         lr_images = self.res(hr_images)
 
         return [lr_images, hr_images]
+
+
+def show_images(image_batch, batch_size):
+    columns = 4
+    rows = (batch_size + 1) // (columns)
+    fig = plt.figure(figsize=(32, (32 // columns) * rows))
+    gs = gridspec.GridSpec(rows, columns)
+    for j in range(rows * columns):
+        img = image_batch.at(j)
+        print(img.dtype)
+        img = np.transpose(img, (1, 2, 0))
+        # img = img.squeeze(2)
+        plt.subplot(gs[j])
+        plt.axis("off")
+        plt.imshow(img, cmap="gray")
+    plt.show()
+
+
+def test_mxnet_pipeline():
+    batch_size = 16
+    pipe = SRGANMXNetPipeline(
+        batch_size=batch_size,
+        num_gpus=1,
+        num_threads=4,
+        device_id=0,
+        crop=88,
+        upscale_factor=2,
+        mx_path="/home/maksim/data/VOC2012/voc_train.rec",
+        mx_index_path="/home/maksim/data/VOC2012/voc_train.idx",
+        image_type=types.DALIImageType.RGB,
+    )
+    pipe.build()
+    lr_images, hr_images = pipe.run()
+    show_images(hr_images.as_cpu(), batch_size)
+    show_images(lr_images.as_cpu(), batch_size)
+
+
+def image_reses():
+    image_rezes = []
+    for img_fp in glob.glob(
+        "/home/maksim/data/ILSVRC2017_CLS-LOC/ILSVRC/Data/CLS-LOC/val/*.JPEG"
+    ):
+        h, w = Image.open(img_fp).size
+        if h < 224 or w < 224:
+            print(h, w)
+            os.remove(img_fp)
+        else:
+            image_rezes.append(img_fp)
+    print(len(image_rezes))
+
+
+def test_iter():
+    train_pipe = SRGANMXNetPipeline(
+        batch_size=16,
+        num_gpus=1,
+        num_threads=1,
+        device_id=0,
+        crop=88,
+        dali_cpu=False,
+        mx_path="/home/maksim/data/VOC2012/voc_val.rec",
+        mx_index_path="/home/maksim/data/VOC2012/voc_val.idx",
+        upscale_factor=2,
+        image_type=types.DALIImageType.RGB,
+    )
+    train_pipe.build()
+    train_loader = StupidDALIIterator(
+        pipelines=[train_pipe],
+        output_map=["lr_image", "hr_image"],
+        size=int(train_pipe.epoch_size("Reader") / 1),
+    )
+
+    for lr, hr in train_loader:
+        print(lr.shape, hr.shape)
