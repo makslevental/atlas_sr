@@ -140,7 +140,7 @@ def train(netG, netD, optimizerG, optimizerD, generator_loss, train_loader):
 
     running_results = {"batch_sizes": 0, "d_loss": 0, "g_loss": 0}
 
-    for lr_image, hr_image in train_loader:
+    for i, (lr_image, hr_image) in enumerate(train_loader):
         batch_size = lr_image.size(0)
         running_results["batch_sizes"] += batch_size
 
@@ -176,6 +176,7 @@ def train(netG, netD, optimizerG, optimizerD, generator_loss, train_loader):
         d_loss = 1 - real_out + fake_out
         running_results["d_loss"] += d_loss.item() * batch_size
 
+        running_results["step"] = f"{i}/{len(train_loader)}"
         print(running_results)
 
     return running_results
@@ -255,17 +256,18 @@ def main(
     upscale_factor=2,
     num_epochs=100,
 ):
+    batch_size = 64
     train_set = TrainDatasetFromFolder(
         train_data_dir, crop_size=crop_size, upscale_factor=upscale_factor
     )
     train_loader = DataLoader(
-        dataset=train_set, num_workers=4, batch_size=16, shuffle=False
+        dataset=train_set, num_workers=4, batch_size=batch_size, shuffle=True, pin_memory=True
     )
     val_set = ValDatasetFromFolder(val_data_dir, upscale_factor=upscale_factor)
-    val_loader = DataLoader(dataset=val_set, num_workers=4, batch_size=1, shuffle=False)
+    val_loader = DataLoader(dataset=val_set, num_workers=4, batch_size=1, shuffle=False, pin_memory=True)
 
-    netG = nn.DataParallel(Generator(scale_factor=upscale_factor, in_channels=3))
-    netD = nn.DataParallel(Discriminator(in_channels=3))
+    netG = Generator(scale_factor=upscale_factor, in_channels=3)
+    netD = Discriminator(in_channels=3)
     generator_criterion = GeneratorLoss()
 
     if torch.cuda.is_available():
@@ -273,8 +275,9 @@ def main(
         netD.cuda()
         generator_criterion.cuda()
 
-    optimizerG = optim.Adam(netG.parameters())
-    optimizerD = optim.Adam(netD.parameters())
+    lr = 1e-4 * batch_size/64
+    optimizerG = optim.Adam(netG.parameters(), lr=lr)
+    optimizerD = optim.Adam(netD.parameters(), lr=lr)
 
     results = {"d_loss": [], "g_loss": [], "psnr": [], "ssim": []}
 
@@ -320,6 +323,6 @@ if __name__ == "__main__":
         upscale_factor=2,
         train_data_dir="/home/maksim/data/VOC2012/train",
         val_data_dir="/home/maksim/data/VOC2012/val",
-        checkpoint_dir="/tmp",
-        metrics_csv_fp="/tmp/metrics.csv",
+        checkpoint_dir="/home/maksim/dev_projects/atlas_sr/checkpoints/srgan_slow_icnr",
+        metrics_csv_fp="/home/maksim/dev_projects/atlas_sr/checkpoints/srgan_slow_icnr/metrics.csv",
     )
