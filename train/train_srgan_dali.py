@@ -114,8 +114,8 @@ if distributed:
         if use_syncbn:
             netG = convert_sync_batchnorm(TorchSyncBatchNorm, netG)
             netD = convert_sync_batchnorm(TorchSyncBatchNorm, netD)
-        netG = nn.parallel.DistributedDataParallel(netG, device_ids=[local_rank])
-        netD = nn.parallel.DistributedDataParallel(netD, device_ids=[local_rank])
+        netG = nn.parallel.DistributedDataParallel(netG, device_ids=[local_rank], broadcast_buffers=False)
+        netD = nn.parallel.DistributedDataParallel(netD, device_ids=[local_rank], broadcast_buffers=False)
 else:
     netG = Generator(scale_factor=upscale_factor, in_channels=channels)
     netD = Discriminator(in_channels=channels)
