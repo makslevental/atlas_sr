@@ -332,7 +332,7 @@ def test_iter():
         dali_cpu=False,
         mx_path="/home/maksim/data/VOC2012/voc_val.rec",
         mx_index_path="/home/maksim/data/VOC2012/voc_val.idx",
-        upscale_factor=2,
+        upscale_factor=4,
         image_type=types.DALIImageType.RGB,
     )
     train_pipe.build()
@@ -344,3 +344,6 @@ def test_iter():
 
     for lr, hr in train_loader:
         print(lr.shape, hr.shape)
+
+if __name__ == "__main__":
+    test_iter()
