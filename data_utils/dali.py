@@ -103,6 +103,9 @@ class StupidDALIIterator:
     def size(self):
         return self.dali_iter._size
 
+    def __len__(self):
+        return self.dali_iter._size // self.dali_iter.batch_size
+
     # hack to make lr_finder work
     @property
     def dataset(self):
@@ -344,6 +347,7 @@ def test_iter():
 
     for lr, hr in train_loader:
         print(lr.shape, hr.shape)
+
 
 if __name__ == "__main__":
     test_iter()

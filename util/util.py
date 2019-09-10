@@ -2,6 +2,7 @@ import gc
 import json
 import os
 import re
+import shutil
 import sys
 import zipfile
 from collections import OrderedDict
@@ -255,8 +256,12 @@ def snapshot(snapshot_dir):
     zipf.close()
 
 
-if __name__ == "__main__":
-    snapshot("/tmp")
+def clear_directory(dir_fp):
+    for root, dirs, files in os.walk(dir_fp):
+        for f in files:
+            os.unlink(os.path.join(root, f))
+        for d in dirs:
+            shutil.rmtree(os.path.join(root, d))
 
 
 def monkey_patch_bn():
@@ -337,6 +342,8 @@ def convert_sync_batchnorm(cls, module, process_group=None):
         module_output.running_var = module.running_var
         module_output.num_batches_tracked = module.num_batches_tracked
     for name, child in module.named_children():
-        module_output.add_module(name, convert_sync_batchnorm(cls, child, process_group))
+        module_output.add_module(
+            name, convert_sync_batchnorm(cls, child, process_group)
+        )
     del module
     return module_output
