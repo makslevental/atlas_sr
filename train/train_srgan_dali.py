@@ -3,6 +3,7 @@ import os
 import time
 from math import log10
 
+import apex
 import pandas as pd
 import torch
 import torch.backends.cudnn
@@ -52,11 +53,11 @@ experiment_name = args.experiment_name
 use_apex = args.use_apex
 prof = args.prof
 
-train_mx_path = args.train_mx_path
-train_mx_index_path = args.train_mx_index_path
-val_mx_path = args.val_mx_path
-val_mx_index_path = args.val_mx_index_path
-checkpoint_dir = args.checkpoint_dir
+train_mx_path = os.path.expanduser(args.train_mx_path)
+train_mx_index_path = os.path.expanduser(args.train_mx_index_path)
+val_mx_path = os.path.expanduser(args.val_mx_path)
+val_mx_index_path = os.path.expanduser(args.val_mx_index_path)
+checkpoint_dir = os.path.expanduser(args.checkpoint_dir)
 
 use_syncbn = args.use_syncbn
 channels = args.channels
@@ -104,18 +105,24 @@ if distributed:
     torch.cuda.set_device(local_rank)
     torch.distributed.init_process_group(backend="nccl", init_method="env://")
     assert world_size == torch.distributed.get_world_size()
+    g_lr *= world_size
+    d_lr *= world_size
     if use_apex:
         if use_syncbn:
-            netG = convert_sync_batchnorm(ApexSyncBatchNorm, netG)
-            netD = convert_sync_batchnorm(ApexSyncBatchNorm, netD)
+            netG = apex.parallel.convert_syncbn_model(netG)
+            netD = apex.parallel.convert_syncbn_model(netD)
         netG = DistributedDataParallel(netG, delay_allreduce=True)
         netD = DistributedDataParallel(netD, delay_allreduce=True)
     else:
         if use_syncbn:
-            netG = convert_sync_batchnorm(TorchSyncBatchNorm, netG)
-            netD = convert_sync_batchnorm(TorchSyncBatchNorm, netD)
-        netG = nn.parallel.DistributedDataParallel(netG, device_ids=[local_rank], broadcast_buffers=False)
-        netD = nn.parallel.DistributedDataParallel(netD, device_ids=[local_rank], broadcast_buffers=False)
+            netG = nn.SyncBatchNorm.convert_sync_batchnorm(netG)
+            netD = nn.SyncBatchNorm.convert_sync_batchnorm(netD)
+        netG = nn.parallel.DistributedDataParallel(
+            netG, device_ids=[local_rank], broadcast_buffers=False
+        )
+        netD = nn.parallel.DistributedDataParallel(
+            netD, device_ids=[local_rank], broadcast_buffers=False
+        )
 else:
     netG = Generator(scale_factor=upscale_factor, in_channels=channels)
     netD = Discriminator(in_channels=channels)
@@ -192,10 +199,10 @@ def train(epoch):
         batch_size = lr_image.shape[0]
 
         adjust_learning_rate(
-            optimizerD, epoch, i, train_loader.size, args.d_lr, args.d_lr * world_size
+            optimizerD, epoch, i, train_loader.size, d_lr
         )
         adjust_learning_rate(
-            optimizerG, epoch, i, train_loader.size, args.g_lr, args.g_lr * world_size
+            optimizerG, epoch, i, train_loader.size, g_lr
         )
 
         if prof and i > 10:
@@ -323,18 +330,24 @@ def find_lr():
     lr_finder_d.plot()
 
 
-def adjust_learning_rate(optimizer, epoch, step, len_epoch, beg_lr, end_lr, n_epochs=5):
-    if epoch < n_epochs:
-        p = (1.0 + step + epoch * len_epoch) / (n_epochs * len_epoch)
-        lr = (1 - p) * beg_lr + p * end_lr
+def adjust_learning_rate(optimizer, epoch, step, len_epoch, orig_lr):
+    """LR schedule that should yield 76% converged accuracy with batch size 256"""
+    factor = epoch // 30
 
-        if args.local_rank == 0 and step % print_freq == 0 and step > 1:
-            print(
-                f"Epoch = {epoch}, step = {step}, {type(optimizer).__name__} lr = {lr}"
-            )
+    if epoch >= 80:
+        factor = factor + 1
 
-        for param_group in optimizer.param_groups:
-            param_group["lr"] = lr
+    lr = orig_lr * (0.1 ** factor)
+
+    """Warmup"""
+    if epoch < 5:
+        lr = lr * float(1 + step + epoch * len_epoch) / (5.0 * len_epoch)
+
+    if local_rank == 0 and step % print_freq == 0 and step > 1:
+        print("Epoch = {}, step = {}, lr = {}".format(epoch, step, lr))
+
+    for param_group in optimizer.param_groups:
+        param_group["lr"] = lr
 
 
 epoch_time_meter = AverageMeter("epoch")
