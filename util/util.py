@@ -198,25 +198,10 @@ def get_model(model: nn.Module):
     )
 
 
-def load_model_state(
-    *,
-    model: nn.Module,
-    file_path: Union[Path, str],
-    device: torch.device,
-    opt: Optional[Optimizer] = None,
-    strict: bool = True,
-    remove_module: bool = False,
-):
-    source = f"{file_path}"
-    state = torch.load(source, map_location=device)
-    model_state = state["model"]
-    if remove_module:
-        model_state = remove_module_load(model_state)
-    get_model(model).load_state_dict(model_state, strict=strict)
-    if opt is not None:
-        opt.load_state_dict(state["optimizer"])
-    del state
-    gc.collect()
+def load_model_state(model: nn.Module, fp: str):
+    state = torch.load(fp)
+    model.load_state_dict(state)
+    return model
 
 
 def reduce_tensor(tensor, world_size):
@@ -318,30 +303,3 @@ def accuracy(output, target, topk=(1,)):
         res.append(correct_k.mul_(100.0 / batch_size))
     return res
 
-
-def convert_sync_batchnorm(cls, module, process_group=None):
-    module_output = module
-    if isinstance(module, torch.nn.modules.batchnorm._BatchNorm):
-        module_output = torch.nn.SyncBatchNorm(
-            module.num_features,
-            module.eps,
-            module.momentum,
-            module.affine,
-            module.track_running_stats,
-            process_group,
-        )
-        if module.affine:
-            module_output.weight.data = module.weight.data.clone().detach()
-            module_output.bias.data = module.bias.data.clone().detach()
-            # keep reuqires_grad unchanged
-            module_output.weight.requires_grad = module.weight.requires_grad
-            module_output.bias.requires_grad = module.bias.requires_grad
-        module_output.running_mean = module.running_mean
-        module_output.running_var = module.running_var
-        module_output.num_batches_tracked = module.num_batches_tracked
-    for name, child in module.named_children():
-        module_output.add_module(
-            name, convert_sync_batchnorm(cls, child, process_group)
-        )
-    del module
-    return module_output

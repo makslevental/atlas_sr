@@ -458,11 +458,11 @@ def save_checkpoint(epoch, start, args: argparse.Namespace, l: SRGANLearner):
     Metrics.reset()
     torch.save(
         l.netG.state_dict(),
-        f"{args.checkpoint_dir}/netG_epoch_{args.upscale_factor}_{epoch}.pth",
+        f"{args.checkpoint_dir}/netG_epoch_{epoch:04}.pth",
     )
     torch.save(
         l.netD.state_dict(),
-        f"{args.checkpoint_dir}/netD_epoch_{args.upscale_factor}_{epoch}.pth",
+        f"{args.checkpoint_dir}/netD_epoch_{epoch:04}.pth",
     )
 
 
