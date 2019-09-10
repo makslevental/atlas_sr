@@ -16,7 +16,11 @@ from torch import nn
 from torch.optim.optimizer import Optimizer
 from tqdm import tqdm
 
-from data_utils.dali import StupidDALIIterator, SRGANMXNetTrainPipeline, SRGANMXNetValPipeline
+from data_utils.dali import (
+    StupidDALIIterator,
+    SRGANMXNetTrainPipeline,
+    SRGANMXNetValPipeline,
+)
 from metrics.metrics import AverageMeter
 from metrics.ssim import ssim
 from models.SRGAN import Generator, Discriminator, GeneratorLoss
@@ -32,6 +36,7 @@ class SRGANLearner:
     train_loader: StupidDALIIterator
     val_loader: StupidDALIIterator
     generator_loss: nn.Module
+    mse_loss: nn.Module
 
 
 @dataclass
@@ -223,7 +228,53 @@ def build_learner(args: argparse.Namespace):
         train_loader=train_loader,
         val_loader=val_loader,
         generator_loss=generator_loss,
+        mse_loss=nn.MSELoss(),
     )
+
+
+def train_srresnet(epoch, args: argparse.Namespace, l: SRGANLearner):
+    Metrics.g_loss.reset()
+    Metrics.sample_speed.reset()
+    l.netG.train()
+
+    if args.local_rank == 0:
+        train_bar = tqdm(
+            l.train_loader,
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}",
+            position=args.local_rank,
+        )
+    else:
+        train_bar = l.train_loader
+
+    for i, (lr_image, hr_image) in enumerate(train_bar):
+        start = time.time()
+        batch_size = lr_image.shape[0]
+        if torch.cuda.is_available():
+            lr_image = lr_image.cuda()
+            hr_image = hr_image.cuda()
+
+        # adjust_learning_rate(l.optimizerD, epoch, i, l.train_loader.size, args.d_lr)
+        # adjust_learning_rate(l.optimizerG, epoch, i, l.train_loader.size, args.g_lr)
+
+        if args.prof and i > 10:
+            break
+
+        l.netG.zero_grad()
+        fake_img = l.netG(lr_image)
+
+        g_loss = l.mse_loss(fake_img, hr_image)
+        g_loss.backward()
+        l.optimizerG.step()
+
+        Metrics.g_loss.update(g_loss.item(), batch_size)
+        Metrics.sample_speed.update(
+            args.world_size * batch_size / (time.time() - start)
+        )
+
+        if args.local_rank == 0 and i % args.print_freq == 0:
+            train_bar.set_description_str(
+                "  ".join([f"{epoch}", str(Metrics.g_loss), str(Metrics.sample_speed)])
+            )
 
 
 def train(epoch, args: argparse.Namespace, l: SRGANLearner):
@@ -343,10 +394,12 @@ def validate(epoch, args: argparse.Namespace, l: SRGANLearner):
             val_bar.set_description_str(
                 "  ".join(
                     [
+                        "\033[1;31m",
                         f"{epoch}",
                         f"mse {Metrics.mse.sum}",
                         str(Metrics.ssim),
                         str(Metrics.psnr),
+                        "\033[1;0m",
                     ]
                 )
             )
@@ -413,6 +466,15 @@ def save_checkpoint(epoch, start, args: argparse.Namespace, l: SRGANLearner):
     )
 
 
+def main_srresnet_loop(args: argparse.Namespace, learner: SRGANLearner):
+    for epoch in range(args.epochs):
+        start = time.time()
+        train_srresnet(epoch, args, learner)
+        validate(epoch, args, learner)
+        if args.local_rank == 0:
+            save_checkpoint(epoch, start, args, learner)
+
+
 def main_loop(args: argparse.Namespace, learner: SRGANLearner):
     for epoch in range(args.epochs):
         start = time.time()
@@ -425,4 +487,5 @@ def main_loop(args: argparse.Namespace, learner: SRGANLearner):
 if __name__ == "__main__":
     args = setup()
     learner = build_learner(args)
-    main_loop(args, learner)
+    # main_loop(args, learner)
+    main_srresnet_loop(args, learner)
