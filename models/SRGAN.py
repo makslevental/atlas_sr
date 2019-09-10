@@ -95,7 +95,7 @@ class ResidualBlock(nn.Module):
         return x + residual
     
     
-def ICNR(tensor, upscale_factor=2, inizializer=nn.init.kaiming_normal):
+def ICNR(tensor, upscale_factor=2, inizializer=nn.init.kaiming_normal_):
     """Fills the input Tensor or Variable with values according to the method
     described in "Checkerboard artifact free sub-pixel convolution"
     - Andrew Aitken et al. (2017), this inizialization should be used in the
