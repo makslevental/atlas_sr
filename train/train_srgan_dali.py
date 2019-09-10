@@ -114,8 +114,8 @@ def setup():
         if not os.path.exists(args.checkpoint_dir):
             os.mkdir(args.checkpoint_dir)
 
-    clear_directory(args.checkpoint_dir)
-    snapshot(args.checkpoint_dir)
+        clear_directory(args.checkpoint_dir)
+        snapshot(args.checkpoint_dir)
 
     if "WORLD_SIZE" in os.environ:
         args.world_size = int(os.environ["WORLD_SIZE"])
@@ -123,6 +123,8 @@ def setup():
     else:
         args.world_size = 1
         args.distributed = False
+
+    # fundamental working rate is 128 @ 1e-3
     args.g_lr *= args.world_size
     args.d_lr *= args.world_size
     return args
