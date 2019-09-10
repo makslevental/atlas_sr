@@ -1,11 +1,12 @@
 import argparse
+import csv
+import inspect
 import os
 import time
 from dataclasses import dataclass
 from math import log10
 
 import apex
-import pandas as pd
 import torch
 import torch.backends.cudnn
 import torch.distributed
@@ -19,8 +20,7 @@ from data_utils.dali import StupidDALIIterator, SRGANMXNetPipeline
 from metrics.metrics import AverageMeter
 from metrics.ssim import ssim
 from models.SRGAN import Generator, Discriminator, GeneratorLoss
-from train.tricks.lr_finder import LRFinder
-from util.util import reduce_tensor, snapshot
+from util.util import snapshot, clear_directory
 
 
 @dataclass
@@ -37,12 +37,32 @@ class SRGANLearner:
 @dataclass
 class Metrics:
     g_loss = AverageMeter("g_loss")
-    dgx = AverageMeter("d(g(x))")
+    d_loss = AverageMeter("d_loss")
+    g_score = AverageMeter("d(g(x))")
+    d_score = AverageMeter("d(x)")
     sample_speed = AverageMeter("s/s")
     mse = AverageMeter("mse")
     ssim = AverageMeter("ssim")
     psnr = AverageMeter("psnr")
     epoch_time = AverageMeter("e_time")
+
+    @classmethod
+    def reset(cls):
+        metrics = [
+            (name, obj)
+            for (name, obj) in inspect.getmembers(cls)
+            if not name.startswith("__") and name != "reset"
+        ]
+        for _, metric in metrics:
+            metric.reset()
+
+    # def __setattr__(self, key, value):
+    #     if isinstance(value, Tuple):
+    #         assert len(value) == 2
+    #         val, n = value
+    #         getattr(self, key).update(val, n)
+    #     else:
+    #         getattr(self, key).update(value)
 
 
 def setup():
@@ -84,8 +104,8 @@ def setup():
     assert os.path.exists(args.train_mx_index_path)
     assert os.path.exists(args.val_mx_path)
     assert os.path.exists(args.val_mx_index_path)
-    assert args.experiment_name
     assert os.path.exists(args.checkpoint_dir)
+    assert args.experiment_name
 
     print(f"GPU {args.local_rank} reporting for duty")
 
@@ -94,6 +114,7 @@ def setup():
         if not os.path.exists(args.checkpoint_dir):
             os.mkdir(args.checkpoint_dir)
 
+    clear_directory(args.checkpoint_dir)
     snapshot(args.checkpoint_dir)
 
     if "WORLD_SIZE" in os.environ:
@@ -104,13 +125,12 @@ def setup():
         args.distributed = False
     args.g_lr *= args.world_size
     args.d_lr *= args.world_size
-
     return args
 
 
 def build_learner(args: argparse.Namespace):
-    netG = Generator(scale_factor=args.upscale_factor, in_channels=args.channels)
-    netD = Discriminator(in_channels=args.channels)
+    netG = Generator(scale_factor=args.upscale_factor)
+    netD = Discriminator()
     g = GeneratorLoss()
     netG.cuda(args.local_rank)
     netD.cuda(args.local_rank)
@@ -137,8 +157,6 @@ def build_learner(args: argparse.Namespace):
                 netD, device_ids=[args.local_rank], broadcast_buffers=False
             )
     else:
-        netG = Generator(scale_factor=args.upscale_factor, in_channels=args.channels)
-        netD = Discriminator(in_channels=args.channels)
         netG = nn.DataParallel(netG)
         netD = nn.DataParallel(netD)
 
@@ -208,19 +226,24 @@ def build_learner(args: argparse.Namespace):
 
 def train(epoch, args: argparse.Namespace, l: SRGANLearner):
     Metrics.g_loss.reset()
-    # Metrics.d_loss.reset()
+    Metrics.d_loss.reset()
+    Metrics.g_score.reset()
+    Metrics.d_score.reset()
     Metrics.sample_speed.reset()
     l.netG.train()
     l.netD.train()
 
-    train_bar = tqdm(l.train_loader, "train")
+    train_bar = tqdm(l.train_loader, bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}")
 
     for i, (lr_image, hr_image) in enumerate(train_bar):
         start = time.time()
         batch_size = lr_image.shape[0]
+        if torch.cuda.is_available():
+            lr_image = lr_image.cuda()
+            hr_image = hr_image.cuda()
 
-        adjust_learning_rate(l.optimizerD, epoch, i, l.train_loader.size, args.d_lr)
-        adjust_learning_rate(l.optimizerG, epoch, i, l.train_loader.size, args.g_lr)
+        # adjust_learning_rate(l.optimizerD, epoch, i, l.train_loader.size, args.d_lr)
+        # adjust_learning_rate(l.optimizerG, epoch, i, l.train_loader.size, args.g_lr)
 
         if args.prof and i > 10:
             break
@@ -244,34 +267,35 @@ def train(epoch, args: argparse.Namespace, l: SRGANLearner):
         g_loss.backward()
         l.optimizerG.step()
 
-        # if args.distributed:
-        #     Metrics.d.update(
-        #         reduce_tensor(d_loss.data, args.world_size).item()
-        #     )
-        #     Metrics.g_loss.update(
-        #         reduce_tensor(g_loss.data, args.world_size).item()
-        #     )
-        # else:
-        #     Metrics.d_loss_meter.update(d_loss.item())
-        #     Metrics.g_loss.update(g_loss.item())
+        ############################
+        # (3) Collect metrics
+        ###########################
+        fake_img = l.netG(lr_image)
+        fake_out = l.netD(fake_img).mean()
 
+        g_loss = l.generator_loss(fake_out, fake_img, hr_image)
+        Metrics.g_loss.update(g_loss.item(), batch_size)
+        d_loss = 1 - real_out + fake_out
+        Metrics.d_loss.update(d_loss.item(), batch_size)
+        Metrics.d_score.update(real_out.item(), batch_size)
+        Metrics.g_score.update(fake_out.item(), batch_size)
         Metrics.sample_speed.update(
             args.world_size * batch_size / (time.time() - start)
         )
 
         if args.local_rank == 0 and i % args.print_freq == 0:
-            train_bar.set_description()
-            # print(
-            #     "\t".join(
-            #         [
-            #             f"epoch {epoch}",
-            #             f"step {i + 1}/{train_loader.size // batch_size}",
-            #             str(sample_speed_meter),
-            #             str(d_loss_meter),
-            #             str(g_loss_meter),
-            #         ]
-            #     )
-            # )
+            train_bar.set_description_str(
+                "  ".join(
+                    [
+                        f"{epoch}",
+                        str(Metrics.d_loss),
+                        str(Metrics.g_loss),
+                        str(Metrics.d_score),
+                        str(Metrics.g_score),
+                        str(Metrics.sample_speed),
+                    ]
+                )
+            )
 
 
 def validate(epoch, args: argparse.Namespace, l: SRGANLearner):
@@ -279,8 +303,11 @@ def validate(epoch, args: argparse.Namespace, l: SRGANLearner):
     Metrics.ssim.reset()
     Metrics.psnr.reset()
     l.netG.eval()
-    val_bar = tqdm(l.val_loader, "val")
+    val_bar = tqdm(l.val_loader, "val", bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}")
     for i, (lr_image, hr_image) in enumerate(val_bar):
+        if torch.cuda.is_available():
+            lr_image = lr_image.cuda()
+            hr_image = hr_image.cuda()
         batch_size = lr_image.shape[0]
         if args.prof and i > 10:
             break
@@ -289,29 +316,22 @@ def validate(epoch, args: argparse.Namespace, l: SRGANLearner):
             sr_image = l.netG(lr_image)
 
         batch_mse = ((sr_image - hr_image) ** 2).mean()
-        batch_ssim = ssim(sr_image, hr_image)
+        batch_ssim = ssim(sr_image, hr_image).item()
 
-    #     if args.distributed:
-    #         Metrics.mse.update(reduce_tensor(batch_mse.data, args.world_size), batch_size)
-    #         Metrics.ssim.update(reduce_tensor(batch_ssim.data, args.world_size), batch_size)
-    #     else:
-    #         Metrics.mse.update(batch_mse.item(), batch_size)
-    #         Metrics.ssim.update(batch_ssim.item(), batch_size)
-    #
-    # Metrics.psnr.update(10 * log10(1 / Metrics.mse.avg))
-    #
-    # if args.local_rank == 0:
-    #     print(
-    #         "\t".join(
-    #             [
-    #                 "\033[1;31m" f"epoch {epoch}",
-    #                 str(mse_meter),
-    #                 str(ssim_meter),
-    #                 str(psnr_meter),
-    #                 "\033[1;0m",
-    #             ]
-    #         )
-    #     )
+        Metrics.mse.update(batch_mse, batch_size)
+        Metrics.ssim.update(batch_ssim, batch_size)
+        Metrics.psnr.set(10 * log10(1 / Metrics.mse.avg))
+        if args.local_rank == 0 and i % args.print_freq == 0:
+            val_bar.set_description_str(
+                "  ".join(
+                    [
+                        f"{epoch}",
+                        f"mse {Metrics.mse.sum}",
+                        str(Metrics.ssim),
+                        str(Metrics.psnr),
+                    ]
+                )
+            )
 
 
 def adjust_learning_rate(optimizer, epoch, step, len_epoch, orig_lr):
@@ -331,50 +351,57 @@ def adjust_learning_rate(optimizer, epoch, step, len_epoch, orig_lr):
         param_group["lr"] = lr
 
 
-running_meters = {
-    "g_loss": [],
-    "d_loss": [],
-    "sample_speed": [],
-    "mse": [],
-    "ssim": [],
-    "psnr": [],
-    "epoch_time": [],
-}
+def save_checkpoint(epoch, start, args: argparse.Namespace, l: SRGANLearner):
+    Metrics.epoch_time.update(time.time() - start)
+    if not args.prof:
+        with open(os.path.join(args.checkpoint_dir, "metrics.csv"), "a+") as csvfile:
+            metrics_writer = csv.writer(csvfile)
+            if epoch == 0:
+                metrics_writer.writerow(
+                    [
+                        "epoch",
+                        "psnr.val",
+                        "ssim.val",
+                        "d_loss.avg",
+                        "d_score.avg",
+                        "g_loss.avg",
+                        "g_score.avg",
+                        "epoch_time.val",
+                        "sample_speed.avg",
+                    ]
+                )
+            metrics_writer.writerow(
+                [
+                    epoch,
+                    Metrics.psnr.val,
+                    Metrics.ssim.val,
+                    Metrics.d_loss.avg,
+                    Metrics.d_score.avg,
+                    Metrics.g_loss.avg,
+                    Metrics.g_score.avg,
+                    Metrics.epoch_time.val,
+                    Metrics.sample_speed.avg,
+                ]
+            )
+
+    Metrics.reset()
+    torch.save(
+        l.netG.state_dict(),
+        f"{args.checkpoint_dir}/netG_epoch_{args.upscale_factor}_{epoch}.pth",
+    )
+    torch.save(
+        l.netD.state_dict(),
+        f"{args.checkpoint_dir}/netD_epoch_{args.upscale_factor}_{epoch}.pth",
+    )
 
 
-# def update_running_meters():
-#     global running_meters
-#     running_meters["g_loss"].append(g_loss_meter.avg)
-#     running_meters["d_loss"].append(d_loss_meter.avg)
-#     running_meters["sample_speed"].append(sample_speed_meter.avg)
-#     running_meters["mse"].append(mse_meter.avg)
-#     running_meters["ssim"].append(ssim_meter.avg)
-#     running_meters["psnr"].append(psnr_meter.avg)
-#     running_meters["epoch_time"].append(epoch_time_meter.val)
-
-
-def main_loop(args: argparse.Namespace, l: SRGANLearner):
+def main_loop(args: argparse.Namespace, learner: SRGANLearner):
     for epoch in range(args.epochs):
         start = time.time()
-        train(epoch, args, l)
-        validate(epoch, args, l)
+        train(epoch, args, learner)
+        validate(epoch, args, learner)
         if args.local_rank == 0:
-            torch.save(
-                l.netG.state_dict(),
-                f"{args.checkpoint_dir}/netG_epoch_{args.upscale_factor}_{epoch}.pth",
-            )
-            torch.save(
-                l.netD.state_dict(),
-                f"{args.checkpoint_dir}/netD_epoch_{args.upscale_factor}_{epoch}.pth",
-            )
-            Metrics.epoch_time.update(time.time() - start)
-            # update_running_meters()
-            if epoch != 0 and not args.prof:
-                data_frame = pd.DataFrame(data=running_meters)
-                data_frame.to_csv(
-                    os.path.join(args.checkpoint_dir, "metrics.csv"),
-                    index_label="Epoch",
-                )
+            save_checkpoint(epoch, start, args, learner)
 
 
 if __name__ == "__main__":
