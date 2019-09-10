@@ -115,7 +115,7 @@ class StupidDALIIterator:
         self.dali_iter.reset()
 
 
-class SRGANPipeline(Pipeline):
+class SRGANTrainPipeline(Pipeline):
     def __init__(
         self,
         batch_size,
@@ -126,7 +126,7 @@ class SRGANPipeline(Pipeline):
         image_type,
         dali_cpu=False,
     ):
-        super(SRGANPipeline, self).__init__(batch_size, num_threads, device_id)
+        super(SRGANTrainPipeline, self).__init__(batch_size, num_threads, device_id)
         crop = calculate_valid_crop_size(crop, upscale_factor)
         decoder_device = "cpu" if dali_cpu else "mixed"
         # This padding sets the size of the internal nvJPEG buffers to be able to handle all images from full-sized ImageNet
@@ -149,7 +149,6 @@ class SRGANPipeline(Pipeline):
             image_type=image_type,
         )
         self.uniform_rng = ops.Uniform(range=(0.0, 1.0))
-        self.cast = ops.Cast(device=dali_device, dtype=types.DALIDataType.FLOAT)
 
     def define_graph(self):
         jpegs, _labels = self.input(name="Reader")
@@ -157,11 +156,54 @@ class SRGANPipeline(Pipeline):
             jpegs, crop_pos_x=self.uniform_rng(), crop_pos_y=self.uniform_rng()
         )
         lr_images = self.res(hr_images)
-
         return [lr_images, hr_images]
 
 
-class SRGANMXNetPipeline(SRGANPipeline):
+# only difference is to match centercrop of srgan example
+class SRGANValPipeline(Pipeline):
+    def __init__(
+        self,
+        batch_size,
+        num_threads,
+        device_id,
+        crop,
+        upscale_factor,
+        image_type,
+        dali_cpu=False,
+    ):
+        super(SRGANValPipeline, self).__init__(batch_size, num_threads, device_id)
+        crop = calculate_valid_crop_size(crop, upscale_factor)
+        decoder_device = "cpu" if dali_cpu else "mixed"
+        # This padding sets the size of the internal nvJPEG buffers to be able to handle all images from full-sized ImageNet
+        # without additional reallocations
+        device_memory_padding = 211025920 if decoder_device == "mixed" else 0
+        host_memory_padding = 140544512 if decoder_device == "mixed" else 0
+        self.decode = ops.ImageDecoderCrop(
+            device=decoder_device,
+            output_type=image_type,
+            device_memory_padding=device_memory_padding,
+            host_memory_padding=host_memory_padding,
+            crop=crop,
+            crop_pos_x=0.5,
+            crop_pos_y=0.5,
+        )
+        dali_device = "cpu" if dali_cpu else "gpu"
+        self.res = ops.Resize(
+            device=dali_device,
+            resize_x=crop // upscale_factor,
+            resize_y=crop // upscale_factor,
+            interp_type=types.DALIInterpType.INTERP_CUBIC,
+            image_type=image_type,
+        )
+
+    def define_graph(self):
+        jpegs, _labels = self.input(name="Reader")
+        hr_images = self.decode(jpegs)
+        lr_images = self.res(hr_images)
+        return [lr_images, hr_images]
+
+
+class SRGANMXNetTrainPipeline(SRGANTrainPipeline):
     def __init__(
         self,
         *,
@@ -177,7 +219,7 @@ class SRGANMXNetPipeline(SRGANPipeline):
         dali_cpu=False,
         random_shuffle=True,
     ):
-        super(SRGANMXNetPipeline, self).__init__(
+        super(SRGANMXNetTrainPipeline, self).__init__(
             batch_size,
             num_threads,
             device_id,
@@ -195,7 +237,41 @@ class SRGANMXNetPipeline(SRGANPipeline):
         )
 
 
-class SRGANFilePipeline(SRGANPipeline):
+class SRGANMXNetValPipeline(SRGANTrainPipeline):
+    def __init__(
+        self,
+        *,
+        batch_size,
+        num_gpus,
+        num_threads,
+        device_id,
+        crop,
+        upscale_factor,
+        image_type,
+        mx_path,
+        mx_index_path,
+        dali_cpu=False,
+        random_shuffle=True,
+    ):
+        super(SRGANMXNetValPipeline, self).__init__(
+            batch_size,
+            num_threads,
+            device_id,
+            crop,
+            upscale_factor,
+            image_type,
+            dali_cpu,
+        )
+        self.input = ops.MXNetReader(
+            path=[mx_path],
+            index_path=[mx_index_path],
+            random_shuffle=random_shuffle,
+            shard_id=device_id,
+            num_shards=num_gpus,
+        )
+
+
+class SRGANFilePipeline(SRGANTrainPipeline):
     def __init__(
         self,
         *,
@@ -294,7 +370,7 @@ def show_images(image_batch, batch_size):
 
 def test_mxnet_pipeline():
     batch_size = 16
-    pipe = SRGANMXNetPipeline(
+    pipe = SRGANMXNetTrainPipeline(
         batch_size=batch_size,
         num_gpus=1,
         num_threads=4,
@@ -326,7 +402,7 @@ def image_reses():
 
 
 def test_iter():
-    train_pipe = SRGANMXNetPipeline(
+    train_pipe = SRGANMXNetTrainPipeline(
         batch_size=16,
         num_gpus=1,
         num_threads=1,

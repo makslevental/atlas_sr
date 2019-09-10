@@ -16,7 +16,7 @@ from torch import nn
 from torch.optim.optimizer import Optimizer
 from tqdm import tqdm
 
-from data_utils.dali import StupidDALIIterator, SRGANMXNetPipeline
+from data_utils.dali import StupidDALIIterator, SRGANMXNetTrainPipeline, SRGANMXNetValPipeline
 from metrics.metrics import AverageMeter
 from metrics.ssim import ssim
 from models.SRGAN import Generator, Discriminator, GeneratorLoss
@@ -38,7 +38,7 @@ class SRGANLearner:
 class Metrics:
     g_loss = AverageMeter("g_loss")
     d_loss = AverageMeter("d_loss")
-    g_score = AverageMeter("d(g(x))")
+    g_score = AverageMeter("d(g(z))")
     d_score = AverageMeter("d(x)")
     sample_speed = AverageMeter("s/s")
     mse = AverageMeter("mse")
@@ -73,6 +73,8 @@ def setup():
     parser.add_argument("--val-mx-path")
     parser.add_argument("--val-mx-index-path")
     parser.add_argument("--checkpoint-dir")
+    parser.add_argument("--train-data-dir")
+    parser.add_argument("--val-data-dir")
 
     # script params
     parser.add_argument("--local_rank", default=0, type=int)
@@ -99,12 +101,16 @@ def setup():
     args.val_mx_path = os.path.expanduser(args.val_mx_path)
     args.val_mx_index_path = os.path.expanduser(args.val_mx_index_path)
     args.checkpoint_dir = os.path.expanduser(args.checkpoint_dir)
+    args.train_data_dir = os.path.expanduser(args.train_data_dir)
+    args.val_data_dir = os.path.expanduser(args.val_data_dir)
 
     assert os.path.exists(args.train_mx_path)
     assert os.path.exists(args.train_mx_index_path)
     assert os.path.exists(args.val_mx_path)
     assert os.path.exists(args.val_mx_index_path)
     assert os.path.exists(args.checkpoint_dir)
+    assert os.path.exists(args.train_data_dir)
+    assert os.path.exists(args.val_data_dir)
     assert args.experiment_name
 
     print(f"GPU {args.local_rank} reporting for duty")
@@ -175,7 +181,7 @@ def build_learner(args: argparse.Namespace):
     # optimizerG = torch.optim.SGD(netG.parameters(), g_lr, momentum=0.9, weight_decay=1e-4)
     # optimizerD = torch.optim.SGD(netD.parameters(), d_lr, momentum=0.9, weight_decay=1e-4)
 
-    train_pipe = SRGANMXNetPipeline(
+    train_pipe = SRGANMXNetTrainPipeline(
         batch_size=args.batch_size,
         num_gpus=args.world_size,
         num_threads=args.workers,
@@ -193,7 +199,7 @@ def build_learner(args: argparse.Namespace):
         size=int(train_pipe.epoch_size("Reader") / args.world_size),
         auto_reset=True,
     )
-    val_pipe = SRGANMXNetPipeline(
+    val_pipe = SRGANMXNetValPipeline(
         batch_size=args.batch_size,
         num_gpus=args.world_size,
         num_threads=args.workers,
@@ -233,7 +239,14 @@ def train(epoch, args: argparse.Namespace, l: SRGANLearner):
     l.netG.train()
     l.netD.train()
 
-    train_bar = tqdm(l.train_loader, bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}")
+    if args.local_rank == 0:
+        train_bar = tqdm(
+            l.train_loader,
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}",
+            position=args.local_rank,
+        )
+    else:
+        train_bar = l.train_loader
 
     for i, (lr_image, hr_image) in enumerate(train_bar):
         start = time.time()
@@ -303,7 +316,16 @@ def validate(epoch, args: argparse.Namespace, l: SRGANLearner):
     Metrics.ssim.reset()
     Metrics.psnr.reset()
     l.netG.eval()
-    val_bar = tqdm(l.val_loader, "val", bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}")
+    if args.local_rank == 0:
+        val_bar = tqdm(
+            l.val_loader,
+            "val",
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}",
+            position=args.local_rank,
+        )
+    else:
+        val_bar = l.val_loader
+
     for i, (lr_image, hr_image) in enumerate(val_bar):
         if torch.cuda.is_available():
             lr_image = lr_image.cuda()
