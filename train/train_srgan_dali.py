@@ -33,6 +33,7 @@ class SRGANLearner:
     netD: nn.Module
     optimizerG: Optimizer
     optimizerD: Optimizer
+    optimizerResnet: Optimizer
     train_loader: StupidDALIIterator
     val_loader: StupidDALIIterator
     generator_loss: nn.Module
@@ -179,8 +180,9 @@ def build_learner(args: argparse.Namespace):
 
     optimizerG = torch.optim.Adam(netG.parameters(), lr=args.g_lr)
     optimizerD = torch.optim.Adam(netD.parameters(), lr=args.d_lr)
-    # optimizerG = torch.optim.SGD(netG.parameters(), g_lr, momentum=0.9, weight_decay=1e-4)
-    # optimizerD = torch.optim.SGD(netD.parameters(), d_lr, momentum=0.9, weight_decay=1e-4)
+    optimizerResnet = torch.optim.SGD(
+        netG.parameters(), lr=args.g_lr, momentum=0.9, weight_decay=1e-4
+    )
 
     train_pipe = SRGANMXNetTrainPipeline(
         batch_size=args.batch_size,
@@ -229,6 +231,7 @@ def build_learner(args: argparse.Namespace):
         val_loader=val_loader,
         generator_loss=generator_loss,
         mse_loss=nn.MSELoss(),
+        optimizerResnet=optimizerResnet,
     )
 
 
@@ -253,8 +256,7 @@ def train_srresnet(epoch, args: argparse.Namespace, l: SRGANLearner):
             lr_image = lr_image.cuda()
             hr_image = hr_image.cuda()
 
-        # adjust_learning_rate(l.optimizerD, epoch, i, l.train_loader.size, args.d_lr)
-        # adjust_learning_rate(l.optimizerG, epoch, i, l.train_loader.size, args.g_lr)
+        adjust_learning_rate(l.optimizerResnet, epoch, i, l.train_loader.size, args.d_lr)
 
         if args.prof and i > 10:
             break
@@ -264,7 +266,7 @@ def train_srresnet(epoch, args: argparse.Namespace, l: SRGANLearner):
 
         g_loss = l.mse_loss(fake_img, hr_image)
         g_loss.backward()
-        l.optimizerG.step()
+        l.optimizerResnet.step()
 
         Metrics.g_loss.update(g_loss.item(), batch_size)
         Metrics.sample_speed.update(
@@ -302,8 +304,8 @@ def train(epoch, args: argparse.Namespace, l: SRGANLearner):
             lr_image = lr_image.cuda()
             hr_image = hr_image.cuda()
 
-        # adjust_learning_rate(l.optimizerD, epoch, i, l.train_loader.size, args.d_lr)
-        # adjust_learning_rate(l.optimizerG, epoch, i, l.train_loader.size, args.g_lr)
+        adjust_learning_rate(l.optimizerD, epoch, i, l.train_loader.size, args.d_lr)
+        adjust_learning_rate(l.optimizerG, epoch, i, l.train_loader.size, args.g_lr)
 
         if args.prof and i > 10:
             break
@@ -416,10 +418,11 @@ def adjust_learning_rate(optimizer, epoch, step, len_epoch, orig_lr):
 
     """Warmup"""
     if epoch < 5:
-        lr = lr * float(1 + step + epoch * len_epoch) / (5.0 * len_epoch)
+        lr = lr * (1.0 + step + epoch * len_epoch) / (5.0 * len_epoch)
 
     for param_group in optimizer.param_groups:
         param_group["lr"] = lr
+    return lr
 
 
 def save_checkpoint(epoch, start, args: argparse.Namespace, l: SRGANLearner):
@@ -456,14 +459,8 @@ def save_checkpoint(epoch, start, args: argparse.Namespace, l: SRGANLearner):
             )
 
     Metrics.reset()
-    torch.save(
-        l.netG.state_dict(),
-        f"{args.checkpoint_dir}/netG_epoch_{epoch:04}.pth",
-    )
-    torch.save(
-        l.netD.state_dict(),
-        f"{args.checkpoint_dir}/netD_epoch_{epoch:04}.pth",
-    )
+    torch.save(l.netG.state_dict(), f"{args.checkpoint_dir}/netG_epoch_{epoch:04}.pth")
+    torch.save(l.netD.state_dict(), f"{args.checkpoint_dir}/netD_epoch_{epoch:04}.pth")
 
 
 def main_srresnet_loop(args: argparse.Namespace, learner: SRGANLearner):
@@ -487,5 +484,5 @@ def main_loop(args: argparse.Namespace, learner: SRGANLearner):
 if __name__ == "__main__":
     args = setup()
     learner = build_learner(args)
-    # main_loop(args, learner)
     main_srresnet_loop(args, learner)
+    # main_loop(args, learner)
