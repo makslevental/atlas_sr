@@ -141,7 +141,9 @@ def train(netG, netD, optimizerG, optimizerD, generator_loss, train_loader):
         "g_score": 0,
     }
 
-    for data, target in tqdm(train_loader, "train"):
+    train_bar = tqdm(train_loader)
+
+    for data, target in train_bar:
         batch_size = data.size(0)
         running_results["batch_sizes"] += batch_size
 
@@ -176,6 +178,14 @@ def train(netG, netD, optimizerG, optimizerD, generator_loss, train_loader):
         running_results["d_loss"] += d_loss.item() * batch_size
         running_results["d_score"] += real_out.item() * batch_size
         running_results["g_score"] += fake_out.item() * batch_size
+
+        
+        train_bar.set_description(desc='Loss_D: %.4f Loss_G: %.4f D(x): %.4f D(G(z)): %.4f' % (
+            running_results['d_loss'] / running_results['batch_sizes'],
+            running_results['g_loss'] / running_results['batch_sizes'],
+            running_results['d_score'] / running_results['batch_sizes'],
+            running_results['g_score'] / running_results['batch_sizes']))
+
 
     return running_results
 
@@ -255,7 +265,7 @@ def main(
             netG, netD, optimizerG, optimizerD, generator_criterion, train_loader
         )
         valing_results = validate(netG, val_loader)
-
+        print(valing_results)
         torch.save(
             netG.state_dict(), f"{checkpoint_dir}/netG_epoch_{upscale_factor}_{epoch}.pth"
         )
