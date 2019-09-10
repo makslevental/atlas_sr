@@ -73,8 +73,6 @@ def setup():
     parser.add_argument("--val-mx-path")
     parser.add_argument("--val-mx-index-path")
     parser.add_argument("--checkpoint-dir")
-    parser.add_argument("--train-data-dir")
-    parser.add_argument("--val-data-dir")
 
     # script params
     parser.add_argument("--local_rank", default=0, type=int)
@@ -101,16 +99,12 @@ def setup():
     args.val_mx_path = os.path.expanduser(args.val_mx_path)
     args.val_mx_index_path = os.path.expanduser(args.val_mx_index_path)
     args.checkpoint_dir = os.path.expanduser(args.checkpoint_dir)
-    args.train_data_dir = os.path.expanduser(args.train_data_dir)
-    args.val_data_dir = os.path.expanduser(args.val_data_dir)
 
     assert os.path.exists(args.train_mx_path)
     assert os.path.exists(args.train_mx_index_path)
     assert os.path.exists(args.val_mx_path)
     assert os.path.exists(args.val_mx_index_path)
     assert os.path.exists(args.checkpoint_dir)
-    assert os.path.exists(args.train_data_dir)
-    assert os.path.exists(args.val_data_dir)
     assert args.experiment_name
 
     print(f"GPU {args.local_rank} reporting for duty")
