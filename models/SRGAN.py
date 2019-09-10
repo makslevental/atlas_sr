@@ -141,7 +141,7 @@ class UpsampleBLock(nn.Module):
         self.conv = nn.Conv2d(
             in_channels, in_channels * up_scale ** 2, kernel_size=3, padding=1
         )
-        kernel = ICNR(self.conv.weight, scale_factor=up_scale)
+        kernel = ICNR(self.conv.weight, upscale_factor=up_scale)
         self.conv.weight.data.copy_(kernel)
         self.pixel_shuffle = nn.PixelShuffle(up_scale)
         self.prelu = nn.PReLU()
