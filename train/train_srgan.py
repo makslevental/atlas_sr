@@ -1,3 +1,4 @@
+import os
 from math import log10
 from os import listdir
 from os.path import join
@@ -191,7 +192,7 @@ def validate(netG, val_loader):
             hr = hr.cuda()
         sr = netG(lr)
 
-        batch_mse = ((sr - hr) ** 2).data.mean()
+        batch_mse = ((sr - hr) ** 2).data.mean().item()
         valing_results["mse"] += batch_mse * batch_size
         batch_ssim = ssim(sr, hr).item()
         valing_results["ssims"] += batch_ssim * batch_size
@@ -212,6 +213,8 @@ def main(
         upscale_factor=2,
         num_epochs=100,
 ):
+    if not os.path.exists(checkpoint_dir):
+        os.mkdir(checkpoint_dir)
     train_set = TrainDatasetFromFolder(
         train_data_dir,
         crop_size=crop_size,
@@ -291,3 +294,13 @@ def main(
                 metrics_csv_fp,
                 index_label="Epoch",
             )
+
+if __name__ == "__main__":
+    data_dir = os.path.expanduser("~/data")
+    main(
+        train_data_dir=f"{data_dir}/VOC2012/train",
+        val_data_dir=f"{data_dir}/VOC2012/val",
+        checkpoint_dir=f"{data_dir}/checkpoints/srgan_slow",
+        metrics_csv_fp=f"{data_dir}/checkpoints/srgan_slow/metrics.csv"
+    )
+
