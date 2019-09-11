@@ -458,11 +458,6 @@ def validate(epoch, args: argparse.Namespace, l: SRGANLearner):
             Metrics.ssim.update(batch_ssim, batch_size)
             Metrics.psnr.set(10 * log10(1 / Metrics.mse.avg))
 
-            step = i + len(l.val_loader) * epoch
-            l.summary_writer.add_scalar(f"val/mse", Metrics.mse.sum, step)
-            l.summary_writer.add_scalar(f"val/ssim", Metrics.ssim.val, step)
-            l.summary_writer.add_scalar(f"val/psnr", Metrics.psnr.val, step)
-
             if i % args.print_freq == 0:
                 val_bar.set_description_str(
                     "  ".join(
@@ -477,10 +472,13 @@ def validate(epoch, args: argparse.Namespace, l: SRGANLearner):
                         ]
                     )
                 )
+    if args.local_rank == 0:
+        l.summary_writer.add_scalar(f"val/mse", Metrics.mse.sum, epoch)
+        l.summary_writer.add_scalar(f"val/ssim", Metrics.ssim.val, epoch)
+        l.summary_writer.add_scalar(f"val/psnr", Metrics.psnr.val, epoch)
 
 
 def adjust_learning_rate(optimizer, epoch, step, len_epoch, orig_lr):
-    """LR schedule that should yield 76% converged accuracy with batch size 256"""
     factor = epoch // 30
 
     if epoch >= 80:
