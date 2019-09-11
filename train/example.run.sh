@@ -1,13 +1,18 @@
 #!/bin/bash
+
+EXPERIMENT_NAME=$1
+UPSCALE=${2:-2}
+EPOCHS=${3:-100}
+
 export PYTHONPATH=../
 python -m torch.distributed.launch \
   --nproc_per_node=4 \
   train_srgan_dali.py \
-  --experiment-name=srresnet_voc_2x \
+  --experiment-name=$EXPERIMENT_NAME \
   --checkpoint-dir=~/data/checkpoints \
   --channels=3 \
-  --upscale-factor=2 \
-  --epochs=100 \
+  --upscale-factor=$UPSCALE \
+  --epochs=$EPOCHS \
   --batch-size=128 \
   --g-lr=1e-3 \
   --d-lr=1e-3 \
