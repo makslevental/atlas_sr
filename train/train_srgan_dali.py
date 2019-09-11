@@ -82,8 +82,8 @@ def setup():
     parser.add_argument("--val-mx-index-path")
     parser.add_argument("--checkpoint-dir")
     parser.add_argument("--tensorboard-dir")
-    parser.add_argument("--net-g-pth")
-    parser.add_argument("--net-d-path")
+    parser.add_argument("--net-g-pth", default=None)
+    parser.add_argument("--net-d-pth", default=None)
 
     # script params
     parser.add_argument("--local_rank", default=0, type=int)
