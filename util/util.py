@@ -19,6 +19,7 @@ from torch.nn import ModuleList
 from torch.nn.parallel import DistributedDataParallel
 from torch.optim.optimizer import Optimizer
 
+from models.SRGAN import Discriminator
 from my_types import NoWeightDecayTypes, ParamList, BiasTypes
 
 old_filter = filter
@@ -186,7 +187,7 @@ def remove_module_load(state_dict):
     """create new OrderedDict that does not contain `module.`"""
     new_state_dict = OrderedDict()
     for k, v in state_dict.items():
-        new_state_dict[k[7:]] = v
+        new_state_dict[k.replace("module.", "")] = v
     return new_state_dict
 
 
@@ -201,6 +202,7 @@ def get_model(model: nn.Module):
 
 def load_model_state(model: nn.Module, fp: str):
     state = torch.load(fp)
+    state = remove_module_load(state)
     model.load_state_dict(state)
     return model
 
@@ -313,4 +315,9 @@ def dict_to_yaml_str(j):
 
 
 if __name__ == "__main__":
-    dict_to_yaml_str({"a": "b"})
+    netD = Discriminator()
+    print(list(netD.parameters())[0])
+    netD = load_model_state(netD,
+                            os.path.expanduser("~/data/checkpoints/srresnet_voc_2x/netD_epoch_0000.pth"))
+    print(list(netD.parameters())[0])
+

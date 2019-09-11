@@ -25,7 +25,7 @@ from data_utils.dali import (
 from metrics.metrics import AverageMeter
 from metrics.ssim import ssim
 from models.SRGAN import Generator, Discriminator, GeneratorLoss
-from util.util import snapshot, clear_directory, dict_to_yaml_str
+from util.util import snapshot, clear_directory, dict_to_yaml_str, load_model_state
 
 
 @dataclass
@@ -82,6 +82,8 @@ def setup():
     parser.add_argument("--val-mx-index-path")
     parser.add_argument("--checkpoint-dir")
     parser.add_argument("--tensorboard-dir")
+    parser.add_argument("--net-g-pth")
+    parser.add_argument("--net-d-path")
 
     # script params
     parser.add_argument("--local_rank", default=0, type=int)
@@ -90,6 +92,7 @@ def setup():
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--print-freq", type=int, default=10)
     parser.add_argument("--prof", action="store_true", default=False)
+    parser.add_argument("--srresnet", action="store_true", default=False)
 
     # hyperparams
     parser.add_argument("--use-syncbn", action="store_true", default=False)
@@ -109,6 +112,10 @@ def setup():
     args.val_mx_index_path = os.path.expanduser(args.val_mx_index_path)
     args.checkpoint_dir = os.path.expanduser(args.checkpoint_dir)
     args.tensorboard_dir = os.path.expanduser(args.tensorboard_dir)
+    if args.net_g_pth is not None:
+        args.net_g_pth = os.path.expanduser(args.net_g_pth)
+    if args.net_d_pth is not None:
+        args.net_d_pth = os.path.expanduser(args.net_d_pth)
 
     assert os.path.exists(args.train_mx_path)
     assert os.path.exists(args.train_mx_index_path)
@@ -148,6 +155,12 @@ def setup():
 def build_learner(args: argparse.Namespace):
     netG = Generator(scale_factor=args.upscale_factor)
     netD = Discriminator()
+
+    if args.net_g_pth is not None:
+        netG = load_model_state(netG, args.net_g_pth)
+    if args.net_d_pth is not None:
+        netG = load_model_state(netG, args.net_d_pth)
+
     g = GeneratorLoss()
     netG.cuda(args.local_rank)
     netD.cuda(args.local_rank)
@@ -296,9 +309,7 @@ def train_srresnet(epoch, args: argparse.Namespace, l: SRGANLearner):
             )
 
             step = i + len(l.train_loader) * epoch
-            l.summary_writer.add_scalar(
-                f"train/g_loss", Metrics.g_loss.val, step
-            )
+            l.summary_writer.add_scalar(f"train/g_loss", Metrics.g_loss.val, step)
             l.summary_writer.add_scalar(
                 f"train/sample_speed", Metrics.sample_speed.val, step
             )
@@ -533,7 +544,7 @@ def main_srresnet_loop(args: argparse.Namespace, learner: SRGANLearner):
             save_checkpoint(epoch, start, args, learner)
 
 
-def main_loop(args: argparse.Namespace, learner: SRGANLearner):
+def main_srgan_loop(args: argparse.Namespace, learner: SRGANLearner):
     for epoch in range(args.epochs):
         start = time.time()
         train(epoch, args, learner)
@@ -545,5 +556,7 @@ def main_loop(args: argparse.Namespace, learner: SRGANLearner):
 if __name__ == "__main__":
     args = setup()
     learner = build_learner(args)
-    main_srresnet_loop(args, learner)
-    # main_loop(args, learner)
+    if args.srresnet:
+        main_srresnet_loop(args, learner)
+    else:
+        main_srgan_loop(args, learner)
