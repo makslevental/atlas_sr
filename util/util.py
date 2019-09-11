@@ -1,8 +1,7 @@
-import gc
+import io
 import json
 import os
 import re
-import shutil
 import sys
 import zipfile
 from collections import OrderedDict
@@ -12,12 +11,14 @@ from typing import NamedTuple, Any, List, Callable, Collection, Union, Optional
 
 import numpy as np
 import torch
+import yaml
 from git import Repo
 from torch import Tensor, nn
+from torch.distributed import all_reduce_multigpu, all_reduce
 from torch.nn import ModuleList
 from torch.nn.parallel import DistributedDataParallel
 from torch.optim.optimizer import Optimizer
-from torch.distributed import all_reduce_multigpu, all_reduce
+
 from my_types import NoWeightDecayTypes, ParamList, BiasTypes
 
 old_filter = filter
@@ -169,7 +170,7 @@ def grouper(iterable, n, fillvalue=None):
 
 
 def save_model(
-    file_path: Union[Path, str], model: nn.Module, opt: Optional[Optimizer] = None
+        file_path: Union[Path, str], model: nn.Module, opt: Optional[Optimizer] = None
 ):
     if rank_distrib():
         return  # don't save if slave proc
@@ -251,14 +252,14 @@ def monkey_patch_bn():
     # https://discuss.pytorch.org/t/training-performance-degrades-with-distributeddataparallel/47152
     # print(inspect.getsource(torch.nn.functional.batch_norm))
     def batch_norm(
-        input,
-        running_mean,
-        running_var,
-        weight=None,
-        bias=None,
-        training=False,
-        momentum=0.1,
-        eps=1e-5,
+            input,
+            running_mean,
+            running_var,
+            weight=None,
+            bias=None,
+            training=False,
+            momentum=0.1,
+            eps=1e-5,
     ):
         if training:
             size = input.size()
@@ -303,3 +304,13 @@ def accuracy(output, target, topk=(1,)):
         res.append(correct_k.mul_(100.0 / batch_size))
     return res
 
+
+def dict_to_yaml_str(j):
+    s = io.StringIO()
+    yaml.dump(j, s)
+    s.seek(0)
+    return s.read()
+
+
+if __name__ == "__main__":
+    dict_to_yaml_str({"a": "b"})
