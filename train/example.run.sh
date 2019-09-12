@@ -10,16 +10,11 @@ python -m torch.distributed.launch \
   train_srgan_dali.py \
   --experiment-name=$EXPERIMENT_NAME \
   --checkpoint-dir=~/data/checkpoints \
-  --channels=3 \
   --upscale-factor=$UPSCALE \
   --epochs=$EPOCHS \
   --batch-size=128 \
   --g-lr=1e-3 \
   --d-lr=1e-3 \
-  --crop-size=88 \
-  --workers=4 \
-  --print-freq=5 \
-  --use-apex \
   --train-mx-path=~/data/VOC2012/voc_train.rec \
   --train-mx-index-path=~/data/VOC2012/voc_train.idx \
   --val-mx-path=~/data/VOC2012/voc_val.rec \

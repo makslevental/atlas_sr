@@ -321,3 +321,19 @@ if __name__ == "__main__":
                             os.path.expanduser("~/data/checkpoints/srresnet_voc_2x/netD_epoch_0000.pth"))
     print(list(netD.parameters())[0])
 
+
+def adjust_learning_rate(optimizer, epoch, step, len_epoch, orig_lr):
+    factor = epoch // 30
+
+    if epoch >= 80:
+        factor = factor + 1
+
+    lr = orig_lr * (0.1 ** factor)
+
+    """Warmup"""
+    if epoch < 5:
+        lr = lr * (1.0 + step + epoch * len_epoch) / (5.0 * len_epoch)
+
+    for param_group in optimizer.param_groups:
+        param_group["lr"] = lr
+    return lr
