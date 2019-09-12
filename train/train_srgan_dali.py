@@ -25,7 +25,13 @@ from data_utils.dali import (
 from metrics.metrics import AverageMeter
 from metrics.ssim import ssim
 from models.SRGAN import Generator, Discriminator, GeneratorLoss
-from util.util import snapshot, clear_directory, dict_to_yaml_str, load_model_state
+from util.util import (
+    snapshot,
+    clear_directory,
+    dict_to_yaml_str,
+    load_model_state,
+    adjust_learning_rate,
+)
 
 
 @dataclass
@@ -87,12 +93,14 @@ def setup():
 
     # script params
     parser.add_argument("--local_rank", default=0, type=int)
-    parser.add_argument("--use-apex", action="store_true", default=False)
-    parser.add_argument("--experiment-name", type=str, default="test")
+    parser.add_argument("--use-apex", action="store_true", default=True)
+    parser.add_argument("--experiment-name", type=str)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--print-freq", type=int, default=10)
     parser.add_argument("--prof", action="store_true", default=False)
     parser.add_argument("--srresnet", action="store_true", default=False)
+    parser.add_argument("--resume", action="store_true", default=False)
+    parser.add_argument("--start-epoch", type=int, default=0)
 
     # hyperparams
     parser.add_argument("--use-syncbn", action="store_true", default=False)
@@ -104,94 +112,100 @@ def setup():
     parser.add_argument("--d-lr", type=float, default=1e-3)
     parser.add_argument("--crop-size", type=int, default=88)
 
-    args = parser.parse_args()
+    config = parser.parse_args()
 
-    args.train_mx_path = os.path.expanduser(args.train_mx_path)
-    args.train_mx_index_path = os.path.expanduser(args.train_mx_index_path)
-    args.val_mx_path = os.path.expanduser(args.val_mx_path)
-    args.val_mx_index_path = os.path.expanduser(args.val_mx_index_path)
-    args.checkpoint_dir = os.path.expanduser(args.checkpoint_dir)
-    args.tensorboard_dir = os.path.expanduser(args.tensorboard_dir)
-    if args.net_g_pth is not None:
-        args.net_g_pth = os.path.expanduser(args.net_g_pth)
-    if args.net_d_pth is not None:
-        args.net_d_pth = os.path.expanduser(args.net_d_pth)
+    config.train_mx_path = os.path.expanduser(config.train_mx_path)
+    config.train_mx_index_path = os.path.expanduser(config.train_mx_index_path)
+    config.val_mx_path = os.path.expanduser(config.val_mx_path)
+    config.val_mx_index_path = os.path.expanduser(config.val_mx_index_path)
+    config.checkpoint_dir = os.path.expanduser(config.checkpoint_dir)
+    config.tensorboard_dir = os.path.expanduser(config.tensorboard_dir)
+    if config.net_g_pth is not None:
+        config.net_g_pth = os.path.expanduser(config.net_g_pth)
+    if config.net_d_pth is not None:
+        config.net_d_pth = os.path.expanduser(config.net_d_pth)
 
-    assert os.path.exists(args.train_mx_path)
-    assert os.path.exists(args.train_mx_index_path)
-    assert os.path.exists(args.val_mx_path)
-    assert os.path.exists(args.val_mx_index_path)
-    assert os.path.exists(args.checkpoint_dir)
-    assert os.path.exists(args.tensorboard_dir)
-    assert args.experiment_name
+    if config.resume:
+        assert config.net_g_pth is not None
+        assert config.net_d_pth is not None
 
-    print(f"GPU {args.local_rank} reporting for duty")
+    assert os.path.exists(config.train_mx_path)
+    assert os.path.exists(config.train_mx_index_path)
+    assert os.path.exists(config.val_mx_path)
+    assert os.path.exists(config.val_mx_index_path)
+    assert os.path.exists(config.checkpoint_dir)
+    assert os.path.exists(config.tensorboard_dir)
+    assert config.experiment_name
 
-    if args.local_rank == 0:
-        args.checkpoint_dir = os.path.join(args.checkpoint_dir, args.experiment_name)
-        if not os.path.exists(args.checkpoint_dir):
-            os.mkdir(args.checkpoint_dir)
-        args.tensorboard_dir = os.path.join(args.tensorboard_dir, args.experiment_name)
-        if not os.path.exists(args.tensorboard_dir):
-            os.mkdir(args.tensorboard_dir)
-
-        clear_directory(args.checkpoint_dir)
-        clear_directory(args.tensorboard_dir)
-        snapshot(args.checkpoint_dir)
+    print(f"GPU {config.local_rank} reporting for duty")
 
     if "WORLD_SIZE" in os.environ:
-        args.world_size = int(os.environ["WORLD_SIZE"])
-        args.distributed = args.world_size > 1
+        config.world_size = int(os.environ["WORLD_SIZE"])
+        config.distributed = config.world_size > 1
     else:
-        args.world_size = 1
-        args.distributed = False
+        config.world_size = 1
+        config.distributed = False
 
-    # fundamental working rate is 128 @ 1e-3
-    # args.g_lr *= args.world_size
-    # args.d_lr *= args.world_size
-    return args
+    if config.local_rank == 0:
+        config.checkpoint_dir = os.path.join(
+            config.checkpoint_dir, config.experiment_name
+        )
+        if not os.path.exists(config.checkpoint_dir):
+            os.mkdir(config.checkpoint_dir)
+        config.tensorboard_dir = os.path.join(
+            config.tensorboard_dir, config.experiment_name
+        )
+        if not os.path.exists(config.tensorboard_dir):
+            os.mkdir(config.tensorboard_dir)
+
+        if not config.resume:
+            clear_directory(config.checkpoint_dir)
+            clear_directory(config.tensorboard_dir)
+        snapshot(config.checkpoint_dir)
+
+    return config
 
 
-def build_learner(args: argparse.Namespace):
-    netG = Generator(scale_factor=args.upscale_factor)
+def build_learner(config: argparse.Namespace):
+    netG = Generator(scale_factor=config.upscale_factor)
     netD = Discriminator()
 
-    if args.net_g_pth is not None:
-        netG = load_model_state(netG, args.net_g_pth)
-    if args.net_d_pth is not None:
-        netG = load_model_state(netG, args.net_d_pth)
+    if config.net_g_pth is not None:
+        netG = load_model_state(netG, config.net_g_pth)
+    if config.net_d_pth is not None:
+        netG = load_model_state(netG, config.net_d_pth)
 
     g = GeneratorLoss()
-    netG.cuda(args.local_rank)
-    netD.cuda(args.local_rank)
-    g.cuda(args.local_rank)
+    netG.cuda(config.local_rank)
+    netD.cuda(config.local_rank)
+    g.cuda(config.local_rank)
 
-    if args.distributed:
-        torch.cuda.set_device(args.local_rank)
+    if config.distributed:
+        torch.cuda.set_device(config.local_rank)
         torch.distributed.init_process_group(backend="nccl", init_method="env://")
-        assert args.world_size == torch.distributed.get_world_size()
-        if args.use_apex:
-            if args.use_syncbn:
+        assert config.world_size == torch.distributed.get_world_size()
+        if config.use_apex:
+            if config.use_syncbn:
                 netG = apex.parallel.convert_syncbn_model(netG)
                 netD = apex.parallel.convert_syncbn_model(netD)
             netG = DistributedDataParallel(netG, delay_allreduce=True)
             netD = DistributedDataParallel(netD, delay_allreduce=True)
         else:
-            if args.use_syncbn:
+            if config.use_syncbn:
                 netG = nn.SyncBatchNorm.convert_sync_batchnorm(netG)
                 netD = nn.SyncBatchNorm.convert_sync_batchnorm(netD)
             netG = nn.parallel.DistributedDataParallel(
-                netG, device_ids=[args.local_rank], broadcast_buffers=False
+                netG, device_ids=[config.local_rank], broadcast_buffers=False
             )
             netD = nn.parallel.DistributedDataParallel(
-                netD, device_ids=[args.local_rank], broadcast_buffers=False
+                netD, device_ids=[config.local_rank], broadcast_buffers=False
             )
     else:
         netG = nn.DataParallel(netG)
         netD = nn.DataParallel(netD)
 
     # because vgg excepts 3 channels
-    if args.channels == 1:
+    if config.channels == 1:
         generator_loss = lambda fake_out, fake_img, hr_image: g(
             fake_out,
             torch.cat([fake_img, fake_img, fake_img], dim=1),
@@ -200,39 +214,39 @@ def build_learner(args: argparse.Namespace):
     else:
         generator_loss = g
 
-    optimizerG = torch.optim.Adam(netG.parameters(), lr=args.g_lr)
-    optimizerD = torch.optim.Adam(netD.parameters(), lr=args.d_lr)
+    optimizerG = torch.optim.Adam(netG.parameters(), lr=config.g_lr)
+    optimizerD = torch.optim.Adam(netD.parameters(), lr=config.d_lr)
     optimizerResnet = torch.optim.SGD(
-        netG.parameters(), lr=args.g_lr, momentum=0.9, weight_decay=1e-4
+        netG.parameters(), lr=config.g_lr, momentum=0.9, weight_decay=1e-4
     )
 
     train_pipe = SRGANMXNetTrainPipeline(
-        batch_size=args.batch_size,
-        num_gpus=args.world_size,
-        num_threads=args.workers,
-        device_id=args.local_rank,
-        crop=args.crop_size,
-        mx_path=args.train_mx_path,
-        mx_index_path=args.train_mx_index_path,
-        upscale_factor=args.upscale_factor,
+        batch_size=config.batch_size,
+        num_gpus=config.world_size,
+        num_threads=config.workers,
+        device_id=config.local_rank,
+        crop=config.crop_size,
+        mx_path=config.train_mx_path,
+        mx_index_path=config.train_mx_index_path,
+        upscale_factor=config.upscale_factor,
         image_type=types.DALIImageType.RGB,
     )
     train_pipe.build()
     train_loader = StupidDALIIterator(
         pipelines=[train_pipe],
         output_map=["lr_image", "hr_image"],
-        size=int(train_pipe.epoch_size("Reader") / args.world_size),
+        size=int(train_pipe.epoch_size("Reader") / config.world_size),
         auto_reset=True,
     )
     val_pipe = SRGANMXNetValPipeline(
-        batch_size=args.batch_size,
-        num_gpus=args.world_size,
-        num_threads=args.workers,
-        device_id=args.local_rank,
-        crop=args.crop_size,
-        mx_path=args.val_mx_path,
-        mx_index_path=args.val_mx_index_path,
-        upscale_factor=args.upscale_factor,
+        batch_size=config.batch_size,
+        num_gpus=config.world_size,
+        num_threads=config.workers,
+        device_id=config.local_rank,
+        crop=config.crop_size,
+        mx_path=config.val_mx_path,
+        mx_index_path=config.val_mx_index_path,
+        upscale_factor=config.upscale_factor,
         random_shuffle=False,
         image_type=types.DALIImageType.RGB,
     )
@@ -240,14 +254,14 @@ def build_learner(args: argparse.Namespace):
     val_loader = StupidDALIIterator(
         pipelines=[val_pipe],
         output_map=["lr_image", "hr_image"],
-        size=int(val_pipe.epoch_size("Reader") / args.world_size),
+        size=int(val_pipe.epoch_size("Reader") / config.world_size),
         auto_reset=True,
     )
 
-    summary_writer = SummaryWriter(args.tensorboard_dir)
-    if args.local_rank == 0:
+    summary_writer = SummaryWriter(config.tensorboard_dir)
+    if config.local_rank == 0:
         # https://stackoverflow.com/a/52784607
-        args_text = "  \n".join(dict_to_yaml_str(args.__dict__).split("\n"))
+        args_text = "  \n".join(dict_to_yaml_str(config.__dict__).split("\n"))
         summary_writer.add_text("args", args_text)
 
     return SRGANLearner(
@@ -264,16 +278,16 @@ def build_learner(args: argparse.Namespace):
     )
 
 
-def train_srresnet(epoch, args: argparse.Namespace, l: SRGANLearner):
+def train_srresnet(epoch, config: argparse.Namespace, l: SRGANLearner):
     l.netG.train()
 
-    if args.local_rank == 0:
+    if config.local_rank == 0:
         Metrics.g_loss.reset()
         Metrics.sample_speed.reset()
         train_bar = tqdm(
             l.train_loader,
             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}",
-            position=args.local_rank,
+            position=config.local_rank,
         )
     else:
         train_bar = l.train_loader
@@ -286,10 +300,10 @@ def train_srresnet(epoch, args: argparse.Namespace, l: SRGANLearner):
             hr_image = hr_image.cuda()
 
         lr = adjust_learning_rate(
-            l.optimizerResnet, epoch, i, l.train_loader.size, args.d_lr
+            l.optimizerResnet, epoch, i, l.train_loader.size, config.d_lr
         )
 
-        if args.prof and i > 10:
+        if config.prof and i > 10:
             break
 
         l.netG.zero_grad()
@@ -302,10 +316,10 @@ def train_srresnet(epoch, args: argparse.Namespace, l: SRGANLearner):
         ############################
         # Collect metrics
         ###########################
-        if args.local_rank == 0:
+        if config.local_rank == 0:
             Metrics.g_loss.update(g_loss.item(), batch_size)
             Metrics.sample_speed.update(
-                args.world_size * batch_size / (time.time() - start)
+                config.world_size * batch_size / (time.time() - start)
             )
 
             step = i + len(l.train_loader) * epoch
@@ -315,7 +329,7 @@ def train_srresnet(epoch, args: argparse.Namespace, l: SRGANLearner):
             )
             l.summary_writer.add_scalar(f"train/lr", lr, step)
 
-            if i % args.print_freq == 0:
+            if i % config.print_freq == 0:
                 train_bar.set_description_str(
                     "  ".join(
                         [f"{epoch}", str(Metrics.g_loss), str(Metrics.sample_speed)]
@@ -323,11 +337,11 @@ def train_srresnet(epoch, args: argparse.Namespace, l: SRGANLearner):
                 )
 
 
-def train(epoch, args: argparse.Namespace, l: SRGANLearner):
+def train(epoch, config: argparse.Namespace, l: SRGANLearner):
     l.netG.train()
     l.netD.train()
 
-    if args.local_rank == 0:
+    if config.local_rank == 0:
         Metrics.g_loss.reset()
         Metrics.d_loss.reset()
         Metrics.g_score.reset()
@@ -336,7 +350,7 @@ def train(epoch, args: argparse.Namespace, l: SRGANLearner):
         train_bar = tqdm(
             l.train_loader,
             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}",
-            position=args.local_rank,
+            position=config.local_rank,
         )
     else:
         train_bar = l.train_loader
@@ -349,13 +363,13 @@ def train(epoch, args: argparse.Namespace, l: SRGANLearner):
             hr_image = hr_image.cuda()
 
         d_lr = adjust_learning_rate(
-            l.optimizerD, epoch, i, l.train_loader.size, args.d_lr
+            l.optimizerD, epoch, i, l.train_loader.size, config.d_lr
         )
         g_lr = adjust_learning_rate(
-            l.optimizerG, epoch, i, l.train_loader.size, args.g_lr
+            l.optimizerG, epoch, i, l.train_loader.size, config.g_lr
         )
 
-        if args.prof and i > 10:
+        if config.prof and i > 10:
             break
 
         ############################
@@ -386,13 +400,13 @@ def train(epoch, args: argparse.Namespace, l: SRGANLearner):
         g_loss = l.generator_loss(fake_out, fake_img, hr_image)
         d_loss = 1 - real_out + fake_out
 
-        if args.local_rank == 0:
+        if config.local_rank == 0:
             Metrics.g_loss.update(g_loss.item(), batch_size)
             Metrics.d_loss.update(d_loss.item(), batch_size)
             Metrics.d_score.update(real_out.item(), batch_size)
             Metrics.g_score.update(fake_out.item(), batch_size)
             Metrics.sample_speed.update(
-                args.world_size * batch_size / (time.time() - start)
+                config.world_size * batch_size / (time.time() - start)
             )
 
             step = i + len(l.train_loader) * epoch
@@ -406,7 +420,7 @@ def train(epoch, args: argparse.Namespace, l: SRGANLearner):
             l.summary_writer.add_scalar(f"train/g_lr", g_lr, step)
             l.summary_writer.add_scalar(f"train/d_lr", d_lr, step)
 
-            if i % args.print_freq == 0:
+            if i % config.print_freq == 0:
                 train_bar.set_description_str(
                     "  ".join(
                         [
@@ -421,9 +435,9 @@ def train(epoch, args: argparse.Namespace, l: SRGANLearner):
                 )
 
 
-def validate(epoch, args: argparse.Namespace, l: SRGANLearner):
+def validate(epoch, config: argparse.Namespace, l: SRGANLearner):
     l.netG.eval()
-    if args.local_rank == 0:
+    if config.local_rank == 0:
         Metrics.mse.reset()
         Metrics.ssim.reset()
         Metrics.psnr.reset()
@@ -431,7 +445,7 @@ def validate(epoch, args: argparse.Namespace, l: SRGANLearner):
             l.val_loader,
             "val",
             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}",
-            position=args.local_rank,
+            position=config.local_rank,
         )
     else:
         val_bar = l.val_loader
@@ -441,7 +455,7 @@ def validate(epoch, args: argparse.Namespace, l: SRGANLearner):
             lr_image = lr_image.cuda()
             hr_image = hr_image.cuda()
         batch_size = lr_image.shape[0]
-        if args.prof and i > 10:
+        if config.prof and i > 10:
             break
 
         with torch.no_grad():
@@ -453,12 +467,12 @@ def validate(epoch, args: argparse.Namespace, l: SRGANLearner):
         ############################
         # Collect metrics
         ###########################
-        if args.local_rank == 0:
+        if config.local_rank == 0:
             Metrics.mse.update(batch_mse, batch_size)
             Metrics.ssim.update(batch_ssim, batch_size)
             Metrics.psnr.set(10 * log10(1 / Metrics.mse.avg))
 
-            if i % args.print_freq == 0:
+            if i % config.print_freq == 0:
                 val_bar.set_description_str(
                     "  ".join(
                         [
@@ -472,33 +486,16 @@ def validate(epoch, args: argparse.Namespace, l: SRGANLearner):
                         ]
                     )
                 )
-    if args.local_rank == 0:
+    if config.local_rank == 0:
         l.summary_writer.add_scalar(f"val/mse", Metrics.mse.sum, epoch)
         l.summary_writer.add_scalar(f"val/ssim", Metrics.ssim.val, epoch)
         l.summary_writer.add_scalar(f"val/psnr", Metrics.psnr.val, epoch)
 
 
-def adjust_learning_rate(optimizer, epoch, step, len_epoch, orig_lr):
-    factor = epoch // 30
-
-    if epoch >= 80:
-        factor = factor + 1
-
-    lr = orig_lr * (0.1 ** factor)
-
-    """Warmup"""
-    if epoch < 5:
-        lr = lr * (1.0 + step + epoch * len_epoch) / (5.0 * len_epoch)
-
-    for param_group in optimizer.param_groups:
-        param_group["lr"] = lr
-    return lr
-
-
-def save_checkpoint(epoch, start, args: argparse.Namespace, l: SRGANLearner):
+def save_checkpoint(epoch, start, config: argparse.Namespace, l: SRGANLearner):
     Metrics.epoch_time.update(time.time() - start)
-    if not args.prof:
-        with open(os.path.join(args.checkpoint_dir, "metrics.csv"), "a+") as csvfile:
+    if not config.prof:
+        with open(os.path.join(config.checkpoint_dir, "metrics.csv"), "a+") as csvfile:
             metrics_writer = csv.writer(csvfile)
             if epoch == 0:
                 metrics_writer.writerow(
@@ -529,32 +526,36 @@ def save_checkpoint(epoch, start, args: argparse.Namespace, l: SRGANLearner):
             )
 
     Metrics.reset()
-    torch.save(l.netG.state_dict(), f"{args.checkpoint_dir}/netG_epoch_{epoch:04}.pth")
-    torch.save(l.netD.state_dict(), f"{args.checkpoint_dir}/netD_epoch_{epoch:04}.pth")
+    torch.save(
+        l.netG.state_dict(), f"{config.checkpoint_dir}/netG_epoch_{epoch:04}.pth"
+    )
+    torch.save(
+        l.netD.state_dict(), f"{config.checkpoint_dir}/netD_epoch_{epoch:04}.pth"
+    )
 
 
-def main_srresnet_loop(args: argparse.Namespace, learner: SRGANLearner):
-    for epoch in range(args.epochs):
+def main_srresnet_loop(config: argparse.Namespace, learner: SRGANLearner):
+    for epoch in range(config.start_epoch, config.epochs):
         start = time.time()
-        train_srresnet(epoch, args, learner)
-        validate(epoch, args, learner)
-        if args.local_rank == 0:
-            save_checkpoint(epoch, start, args, learner)
+        train_srresnet(epoch, config, learner)
+        validate(epoch, config, learner)
+        if config.local_rank == 0:
+            save_checkpoint(epoch, start, config, learner)
 
 
-def main_srgan_loop(args: argparse.Namespace, learner: SRGANLearner):
-    for epoch in range(args.epochs):
+def main_srgan_loop(config: argparse.Namespace, learner: SRGANLearner):
+    for epoch in range(config.start_epoch, config.epochs):
         start = time.time()
-        train(epoch, args, learner)
-        validate(epoch, args, learner)
-        if args.local_rank == 0:
-            save_checkpoint(epoch, start, args, learner)
+        train(epoch, config, learner)
+        validate(epoch, config, learner)
+        if config.local_rank == 0:
+            save_checkpoint(epoch, start, config, learner)
 
 
 if __name__ == "__main__":
-    args = setup()
-    learner = build_learner(args)
-    if args.srresnet:
-        main_srresnet_loop(args, learner)
+    config = setup()
+    learner = build_learner(config)
+    if config.srresnet:
+        main_srresnet_loop(config, learner)
     else:
-        main_srgan_loop(args, learner)
+        main_srgan_loop(config, learner)
