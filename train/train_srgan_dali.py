@@ -172,7 +172,7 @@ def build_learner(config: argparse.Namespace):
     if config.net_g_pth is not None:
         netG = load_model_state(netG, config.net_g_pth)
     if config.net_d_pth is not None:
-        netG = load_model_state(netG, config.net_d_pth)
+        netD = load_model_state(netD, config.net_d_pth)
 
     g = GeneratorLoss()
     netG.cuda(config.local_rank)
