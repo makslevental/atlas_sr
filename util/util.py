@@ -204,6 +204,8 @@ def load_model_state(model: nn.Module, fp: str):
     state = torch.load(fp)
     state = remove_module_load(state)
     model.load_state_dict(state)
+    del state
+    torch.cuda.empty_cache()
     return model
 
 
