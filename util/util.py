@@ -201,7 +201,7 @@ def get_model(model: nn.Module):
 
 
 def load_model_state(model: nn.Module, fp: str):
-    state = torch.load(fp)
+    state = torch.load(fp, map_location='cpu')
     state = remove_module_load(state)
     model.load_state_dict(state)
     del state
