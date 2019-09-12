@@ -89,6 +89,8 @@ def setup():
     parser.add_argument("--tensorboard-dir")
     parser.add_argument("--net-g-pth", default=None)
     parser.add_argument("--net-d-pth", default=None)
+    parser.add_argument("--opt-g-pth", default=None)
+    parser.add_argument("--opt-d-pth", default=None)
 
     # script params
     parser.add_argument("--local_rank", default=0, type=int)
@@ -123,10 +125,16 @@ def setup():
         config.net_g_pth = os.path.expanduser(config.net_g_pth)
     if config.net_d_pth is not None:
         config.net_d_pth = os.path.expanduser(config.net_d_pth)
+    if config.opt_g_pth is not None:
+        config.opt_g_pth = os.path.expanduser(config.opt_g_pth)
+    if config.opt_d_pth is not None:
+        config.opt_d_pth = os.path.expanduser(config.opt_d_pth)
 
     if config.resume:
         assert config.net_g_pth is not None
         assert config.net_d_pth is not None
+        assert config.opt_g_pth is not None
+        assert config.opt_d_pth is not None
 
     assert os.path.exists(config.train_mx_path)
     assert os.path.exists(config.train_mx_index_path)
@@ -215,6 +223,10 @@ def build_learner(config: argparse.Namespace):
 
     optimizerG = torch.optim.Adam(netG.parameters(), lr=config.g_lr)
     optimizerD = torch.optim.SGD(netD.parameters(), lr=config.d_lr)
+    if config.opt_g_pth is not None:
+        optimizerG = load_model_state(optimizerG, config.opt_g_pth)
+    if config.opt_d_pth is not None:
+        optimizerD = load_model_state(optimizerD, config.opt_d_pth)
 
     train_pipe = SRGANMXNetTrainPipeline(
         batch_size=config.batch_size,
@@ -526,6 +538,12 @@ def save_checkpoint(epoch, start, config: argparse.Namespace, l: SRGANLearner):
     )
     torch.save(
         l.netD.state_dict(), f"{config.checkpoint_dir}/netD_epoch_{epoch:04}.pth"
+    )
+    torch.save(
+        l.optimizerG.state_dict(), f"{config.checkpoint_dir}/optG_epoch_{epoch:04}.pth"
+    )
+    torch.save(
+        l.optimizerD.state_dict(), f"{config.checkpoint_dir}/optD_epoch_{epoch:04}.pth"
     )
 
 
