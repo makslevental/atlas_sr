@@ -171,7 +171,7 @@ def grouper(iterable, n, fillvalue=None):
 
 
 def save_model(
-        file_path: Union[Path, str], model: nn.Module, opt: Optional[Optimizer] = None
+    file_path: Union[Path, str], model: nn.Module, opt: Optional[Optimizer] = None
 ):
     if rank_distrib():
         return  # don't save if slave proc
@@ -254,14 +254,14 @@ def monkey_patch_bn():
     # https://discuss.pytorch.org/t/training-performance-degrades-with-distributeddataparallel/47152
     # print(inspect.getsource(torch.nn.functional.batch_norm))
     def batch_norm(
-            input,
-            running_mean,
-            running_var,
-            weight=None,
-            bias=None,
-            training=False,
-            momentum=0.1,
-            eps=1e-5,
+        input,
+        running_mean,
+        running_var,
+        weight=None,
+        bias=None,
+        training=False,
+        momentum=0.1,
+        eps=1e-5,
     ):
         if training:
             size = input.size()
@@ -314,15 +314,7 @@ def dict_to_yaml_str(j):
     return s.read()
 
 
-if __name__ == "__main__":
-    netD = Discriminator()
-    print(list(netD.parameters())[0])
-    netD = load_model_state(netD,
-                            os.path.expanduser("~/data/checkpoints/srresnet_voc_2x/netD_epoch_0000.pth"))
-    print(list(netD.parameters())[0])
-
-
-def adjust_learning_rate(optimizer, epoch, step, len_epoch, orig_lr):
+def adjust_learning_rate(optimizer: Optimizer, epoch, step, len_epoch, orig_lr):
     factor = epoch // 30
 
     if epoch >= 80:
@@ -337,3 +329,13 @@ def adjust_learning_rate(optimizer, epoch, step, len_epoch, orig_lr):
     for param_group in optimizer.param_groups:
         param_group["lr"] = lr
     return lr
+
+
+if __name__ == "__main__":
+    netD = Discriminator()
+    print(list(netD.parameters())[0])
+    netD = load_model_state(
+        netD,
+        os.path.expanduser("~/data/checkpoints/srresnet_voc_2x/netD_epoch_0000.pth"),
+    )
+    print(list(netD.parameters())[0])
