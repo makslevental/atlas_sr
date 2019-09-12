@@ -40,7 +40,6 @@ class SRGANLearner:
     netD: nn.Module
     optimizerG: Optimizer
     optimizerD: Optimizer
-    optimizerResnet: Optimizer
     train_loader: StupidDALIIterator
     val_loader: StupidDALIIterator
     generator_loss: nn.Module
@@ -215,10 +214,7 @@ def build_learner(config: argparse.Namespace):
         generator_loss = g
 
     optimizerG = torch.optim.Adam(netG.parameters(), lr=config.g_lr)
-    optimizerD = torch.optim.Adam(netD.parameters(), lr=config.d_lr)
-    optimizerResnet = torch.optim.SGD(
-        netG.parameters(), lr=config.g_lr, momentum=0.9, weight_decay=1e-4
-    )
+    optimizerD = torch.optim.SGD(netD.parameters(), lr=config.d_lr)
 
     train_pipe = SRGANMXNetTrainPipeline(
         batch_size=config.batch_size,
@@ -273,7 +269,6 @@ def build_learner(config: argparse.Namespace):
         val_loader=val_loader,
         generator_loss=generator_loss,
         mse_loss=nn.MSELoss(),
-        optimizerResnet=optimizerResnet,
         summary_writer=summary_writer,
     )
 
@@ -300,7 +295,7 @@ def train_srresnet(epoch, config: argparse.Namespace, l: SRGANLearner):
             hr_image = hr_image.cuda()
 
         lr = adjust_learning_rate(
-            l.optimizerResnet, epoch, i, l.train_loader.size, config.d_lr
+            l.optimizerG, epoch, i, l.train_loader.size, config.d_lr
         )
 
         if config.prof and i > 10:
@@ -311,7 +306,7 @@ def train_srresnet(epoch, config: argparse.Namespace, l: SRGANLearner):
 
         g_loss = l.mse_loss(fake_img, hr_image)
         g_loss.backward()
-        l.optimizerResnet.step()
+        l.optimizerG.step()
 
         ############################
         # Collect metrics
