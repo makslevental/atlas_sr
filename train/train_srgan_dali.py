@@ -306,9 +306,10 @@ def train_srresnet(epoch, config: argparse.Namespace, l: SRGANLearner):
             lr_image = lr_image.cuda()
             hr_image = hr_image.cuda()
 
-        lr = adjust_learning_rate(
-            l.optimizerG, epoch, i, l.train_loader.size, config.d_lr
-        )
+        # lr = adjust_learning_rate(
+        #     l.optimizerG, epoch, i, l.train_loader.size, config.g_lr
+        # )
+        lr = config.g_lr
 
         if config.prof and i > 10:
             break
