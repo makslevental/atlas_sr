@@ -146,13 +146,6 @@ def setup():
 
     print(f"GPU {config.local_rank} reporting for duty")
 
-    if "WORLD_SIZE" in os.environ:
-        config.world_size = int(os.environ["WORLD_SIZE"])
-        config.distributed = config.world_size > 1
-    else:
-        config.world_size = 1
-        config.distributed = False
-
     if config.local_rank == 0:
         config.checkpoint_dir = os.path.join(
             config.checkpoint_dir, config.experiment_name
@@ -174,6 +167,13 @@ def setup():
 
 
 def build_learner(config: argparse.Namespace):
+    if "WORLD_SIZE" in os.environ:
+        config.world_size = int(os.environ["WORLD_SIZE"])
+        config.distributed = config.world_size > 1
+    else:
+        config.world_size = 1
+        config.distributed = False
+
     netG = Generator(scale_factor=config.upscale_factor)
     netD = Discriminator()
 
@@ -382,8 +382,8 @@ def train(epoch, config: argparse.Namespace, l: SRGANLearner):
         ############################
         # (1) Update D network: maximize D(x)-1-D(G(z))
         ##########################
-        fake_img = l.netG(lr_image)
         l.netD.zero_grad()
+        fake_img = l.netG(lr_image)
         real_out = l.netD(hr_image).mean()
         fake_out = l.netD(fake_img).mean()
         d_loss = 1 - real_out + fake_out
@@ -499,8 +499,7 @@ def validate(epoch, config: argparse.Namespace, l: SRGANLearner):
         l.summary_writer.add_scalar(f"val/psnr", Metrics.psnr.val, epoch)
 
 
-def save_checkpoint(epoch, start, config: argparse.Namespace, l: SRGANLearner):
-    Metrics.epoch_time.update(time.time() - start)
+def save_checkpoint(epoch, config: argparse.Namespace, l: SRGANLearner):
     if not config.prof:
         with open(os.path.join(config.checkpoint_dir, "metrics.csv"), "a+") as csvfile:
             metrics_writer = csv.writer(csvfile)
@@ -552,8 +551,10 @@ def main_srresnet_loop(config: argparse.Namespace, learner: SRGANLearner):
         start = time.time()
         train_srresnet(epoch, config, learner)
         validate(epoch, config, learner)
+        Metrics.epoch_time.update(time.time() - start)
         if config.local_rank == 0:
-            save_checkpoint(epoch, start, config, learner)
+            save_checkpoint(epoch, config, learner)
+            learner.summary_writer.add_scalar(f"epoch_time", Metrics.epoch_time.val, epoch)
 
 
 def main_srgan_loop(config: argparse.Namespace, learner: SRGANLearner):
@@ -561,8 +562,10 @@ def main_srgan_loop(config: argparse.Namespace, learner: SRGANLearner):
         start = time.time()
         train(epoch, config, learner)
         validate(epoch, config, learner)
+        Metrics.epoch_time.update(time.time() - start)
         if config.local_rank == 0:
-            save_checkpoint(epoch, start, config, learner)
+            save_checkpoint(epoch, config, learner)
+            learner.summary_writer.add_scalar(f"epoch_time", Metrics.epoch_time.val, epoch)
 
 
 if __name__ == "__main__":

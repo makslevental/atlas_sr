@@ -93,7 +93,8 @@ class StupidDALIIterator:
     def __next__(self):
         n = next(self.dali_iter)
         lr_image, hr_image = n[0]["lr_image"], n[0]["hr_image"]
-        hr_image = hr_image.to(torch.float).div(255)
+        # scale hr image to [-1,1] because generator output is tanh
+        hr_image = hr_image.to(torch.float).sub(127.5).div(127.5)
         lr_image = lr_image.to(torch.float).div(255)
         hr_image = hr_image.permute(0, 3, 1, 2)
         lr_image = lr_image.permute(0, 3, 1, 2)
