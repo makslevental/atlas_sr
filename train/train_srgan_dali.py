@@ -36,14 +36,14 @@ from util.util import (
 
 @dataclass
 class SRGANLearner:
-    netG: nn.Module
-    netD: nn.Module
+    netG: Generator
+    netD: Discriminator
     optimizerG: Optimizer
     optimizerD: Optimizer
     train_loader: StupidDALIIterator
     val_loader: StupidDALIIterator
-    generator_loss: nn.Module
-    mse_loss: nn.Module
+    generator_loss: GeneratorLoss
+    mse_loss: nn.MSELoss
     summary_writer: SummaryWriter
 
 
