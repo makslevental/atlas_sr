@@ -30,7 +30,7 @@ def extract_feat_patches(img, patch_size):
         [extract_patches_2d(feat, (patch_size, patch_size)) for feat in feats]
     )
     # flatten patches to vectors
-    n_patches = feat_patches.shape[1]
+    n_patches = feat_patches.shape[1]  # (4, n, patch_size, patch_size)
     feat_patches = feat_patches.transpose(1, 0, 2, 3).reshape(n_patches, -1)
     return feat_patches
 
@@ -105,7 +105,10 @@ def scaleup_anr(img, upscale, feat_basis, lr_dict, local_projections, patch_size
         else:
             patches = np.concatenate((patches, patch))
 
-    return reconstruct_from_patches_2d(patches, mr_img.shape)
+    low_freq_patches = extract_patches_2d(mr_img, (patch_size, patch_size))
+    return (
+        reconstruct_from_patches_2d(patches + low_freq_patches, mr_img.shape) + mr_img
+    )
 
 
 def _show_patches(patches, patch_size):
@@ -186,27 +189,39 @@ def train_anr(
     return local_projections, lr_dict, hr_dict, feat_basis
 
 
+def plot_gallery(title, images, n_col, n_row, cmap=plt.cm.gray):
+    plt.figure(figsize=(2.0 * n_col, 2.26 * n_row))
+    plt.suptitle(title, size=16)
+    for i, comp in enumerate(images):
+        plt.subplot(n_row, n_col, i + 1)
+        # vmax = max(comp.max(), -comp.min())
+        plt.imshow(comp, cmap=cmap)
+        plt.xticks(())
+        plt.yticks(())
+    plt.subplots_adjust(0.01, 0.05, 0.99, 0.93, 0.04, 0.0)
+
+
 if __name__ == "__main__":
     upscale = 2
     face_images = datasets.fetch_olivetti_faces().images
     hr_img = face_images[0]
-    local_projections, lr_dict, hr_dict, feat_basis = train_anr(
-        face_images, upscale=upscale
-    )
+    # local_projections, lr_dict, hr_dict, feat_basis = train_anr(
+    #     face_images, upscale=upscale
+    # )
 
-    np.save("local_projections", local_projections)
-    np.save("lr_dict", lr_dict)
-    np.save("hr_dict", hr_dict)
-    np.save("feat_basis", feat_basis)
+    # np.save("local_projections", local_projections)
+    # np.save("lr_dict", lr_dict)
+    # np.save("hr_dict", hr_dict)
+    # np.save("feat_basis", feat_basis)
+    local_projections = np.load("local_projections.npy", allow_pickle=True).item()
+    lr_dict = np.load("lr_dict.npy", allow_pickle=True)
+    hr_dict = np.load("hr_dict.npy", allow_pickle=True)
+    feat_basis = np.load("feat_basis.npy", allow_pickle=True)
 
     lr_img = rescale(hr_img, (1 / upscale, 1 / upscale), order=3)
     print(lr_img.shape)
     sr_img = scaleup_anr(
         lr_img, upscale, feat_basis, lr_dict, local_projections, patch_size=9
     )
-    plt.imshow(lr_img)
-    plt.show()
-    plt.imshow(hr_img)
-    plt.show()
-    plt.imshow(sr_img)
+    plot_gallery("anr", [lr_img, hr_img, sr_img], 3, 1)
     plt.show()
