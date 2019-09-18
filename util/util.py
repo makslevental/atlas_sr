@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import NamedTuple, Any, List, Callable, Collection, Union, Optional
 
 import numpy as np
+import pandas as pd
 import torch
 import yaml
 from git import Repo
@@ -171,7 +172,7 @@ def grouper(iterable, n, fillvalue=None):
 
 
 def save_model(
-    file_path: Union[Path, str], model: nn.Module, opt: Optional[Optimizer] = None
+        file_path: Union[Path, str], model: nn.Module, opt: Optional[Optimizer] = None
 ):
     if rank_distrib():
         return  # don't save if slave proc
@@ -201,7 +202,7 @@ def get_model(model: nn.Module):
 
 
 def load_model_state(model: nn.Module, fp: str):
-    state = torch.load(fp, map_location='cpu')
+    state = torch.load(fp, map_location="cpu")
     state = remove_module_load(state)
     model.load_state_dict(state)
     del state
@@ -255,14 +256,14 @@ def monkey_patch_bn():
     # https://discuss.pytorch.org/t/training-performance-degrades-with-distributeddataparallel/47152
     # print(inspect.getsource(torch.nn.functional.batch_norm))
     def batch_norm(
-        input,
-        running_mean,
-        running_var,
-        weight=None,
-        bias=None,
-        training=False,
-        momentum=0.1,
-        eps=1e-5,
+            input,
+            running_mean,
+            running_var,
+            weight=None,
+            bias=None,
+            training=False,
+            momentum=0.1,
+            eps=1e-5,
     ):
         if training:
             size = input.size()
@@ -330,6 +331,42 @@ def adjust_learning_rate(optimizer: Optimizer, epoch, step, len_epoch, orig_lr):
     for param_group in optimizer.param_groups:
         param_group["lr"] = lr
     return lr
+
+
+def ndtotext(A, w=None, h=None):
+    if A.ndim == 1:
+        if w == None:
+            return str(A)
+        else:
+            s = "["
+            for i, AA in enumerate(A[:-1]):
+                s += str(AA) + " " * (max(w[i], len(str(AA))) - len(str(AA)) + 1)
+            s += (
+                    str(A[-1])
+                    + " " * (max(w[-1], len(str(A[-1]))) - len(str(A[-1])))
+                    + "] "
+            )
+    elif A.ndim == 2:
+        w1 = [max([len(str(s)) for s in A[:, i]]) for i in range(A.shape[1])]
+        w0 = sum(w1) + len(w1) + 1
+        s = "\u250c" + "\u2500" * w0 + "\u2510" + "\n"
+        for AA in A:
+            s += " " + ndtotext(AA, w=w1) + "\n"
+        s += "\u2514" + "\u2500" * w0 + "\u2518"
+    elif A.ndim == 3:
+        h = A.shape[1]
+        s1 = "\u250c" + "\n" + ("\u2502" + "\n") * h + "\u2514" + "\n"
+        s2 = "\u2510" + "\n" + ("\u2502" + "\n") * h + "\u2518" + "\n"
+        strings = [ndtotext(a) + "\n" for a in A]
+        strings.append(s2)
+        strings.insert(0, s1)
+        s = "\n".join("".join(pair) for pair in zip(*map(str.splitlines, strings)))
+    return s
+
+
+def ndtopd(arr):
+    df = pd.DataFrame({i: arr[i, :] for i in range(len(arr))})
+    return df.T
 
 
 if __name__ == "__main__":
