@@ -1,13 +1,22 @@
+from functools import partial
+
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.signal import convolve2d
 from skimage.transform import rescale
 from sklearn import datasets
-from sklearn.decomposition import MiniBatchDictionaryLearning
+from sklearn.decomposition import MiniBatchDictionaryLearning, PCA
 from sklearn.feature_extraction.image import (
     extract_patches_2d,
     reconstruct_from_patches_2d,
 )
+from multiprocessing import Pool
+
+from sklearn.preprocessing import normalize
+from scipy.spatial import distance
+
+
+from util.util import grouper
 
 
 def extract_features(img):
@@ -35,30 +44,23 @@ def extract_feat_patches(img, patch_size):
     return feat_patches
 
 
-def pca(vecs):
-    # vecs is column-wise
-    evals, evecs = np.linalg.eig(vecs @ vecs.T)
-    assert sum(np.abs(evals.conj() - evals)) < 1e-9
-    evals, evecs = (
-        evals.real[evals.real > np.finfo(float).eps],
-        evecs.real[:, evals.real > np.finfo(float).eps],
-    )
-    evals, evecs = evals[evals.argsort()], evecs[:, evals.argsort()]
-    cum_variance = np.cumsum(evals) / np.sum(evals)
-    # top 99% variance retained
-    evecs = evecs[:, cum_variance > 1e-3]
-    assert (np.abs(evecs.conj() - evecs) < np.finfo(float).eps).all()
-    evecs = evecs.real
-    return evecs, vecs.T @ evecs
-
-
-def extract_lr_hr_patches(hr_img, patch_size, upscale):
+def make_lr(hr_img, upscale):
     lr_img = rescale(
         hr_img, (1 / upscale, 1 / upscale), order=3, multichannel=len(hr_img.shape) == 3
     )
     lr_img = rescale(
         lr_img, (upscale, upscale), order=3, multichannel=len(hr_img.shape) == 3
     )
+    h, w = min(lr_img.shape[0], hr_img.shape[0]), min(lr_img.shape[1], hr_img.shape[1])
+    lr_img = lr_img[:h, :w]
+    hr_img = hr_img[:h, :w]
+    return lr_img, hr_img
+
+
+def extract_lr_hr_patches(hr_img, patch_size, upscale):
+    if hr_img is None:
+        return
+    lr_img, hr_img = make_lr(hr_img, upscale)
     # this is so we extact patches from the same place in both hr and lr
     lr_feat_patches = extract_feat_patches(lr_img, patch_size)
     # subtract high freqs from hr_patches? don't know why???
@@ -69,29 +71,11 @@ def extract_lr_hr_patches(hr_img, patch_size, upscale):
     # flatten patches to vectors
     n_patches = hr_patches.shape[0]
     hr_patches = hr_patches.reshape(n_patches, -1)
-    return lr_feat_patches.T, hr_patches.T
-
-
-def norm_patches(lr_patches, hr_patches, threshold=0):
-    above_thresh_idxs = np.var(hr_patches, axis=1) > threshold
-    hr_patches = hr_patches[above_thresh_idxs]
-    lr_patches = lr_patches[above_thresh_idxs]
-
-    l_norm = np.var(lr_patches, axis=1, keepdims=True)
-    h_norm = np.var(hr_patches, axis=1, keepdims=True)
-
-    valid_idxs = np.logical_and(l_norm.squeeze() > 0, h_norm.squeeze() > 0)
-
-    hr_patches = hr_patches[valid_idxs] / h_norm[valid_idxs]
-    lr_patches = lr_patches[valid_idxs] / l_norm[valid_idxs]
-
-    return lr_patches, hr_patches
+    return lr_feat_patches, hr_patches
 
 
 def scaleup_anr(img, upscale, feat_basis, lr_dict, local_projections, patch_size=9):
-    mr_img = rescale(
-        img, (upscale, upscale), order=3, multichannel=len(hr_img.shape) == 3
-    )
+    mr_img = rescale(img, (upscale, upscale), order=3, multichannel=len(img.shape) == 3)
     feat_patches = extract_feat_patches(mr_img, patch_size)
     features = feat_patches @ feat_basis
     nearest_atoms = (features @ lr_dict.T).argmax(axis=1)
@@ -127,31 +111,57 @@ def _show_patches(patches, patch_size):
 def train_anr_dict(imgs, patch_size, upscale, dict_size, dict_alpha):
     lr_feat_patches = None
     hr_patches = None
-
-    for i, img in enumerate(imgs):
-        print(f"feature patches for img {i}")
-        lr_img_feat_patches, hr_img_patches = extract_lr_hr_patches(
-            img, patch_size, upscale
-        )
-        if lr_feat_patches is None:
-            lr_feat_patches = lr_img_feat_patches
-            hr_patches = hr_img_patches
-        else:
-            lr_feat_patches = np.append(lr_feat_patches, lr_img_feat_patches, axis=1)
-            hr_patches = np.append(hr_patches, hr_img_patches, axis=1)
+    n_processes = 16
+    with Pool(n_processes) as p:
+        for i, img_group in enumerate(grouper(imgs, n_processes)):
+            print(f"feature patches for img group {i}/{len(imgs)//n_processes}")
+            # lr_img_feat_patches, hr_img_patches = extract_lr_hr_patches(
+            #     img, patch_size, upscale
+            # )
+            res = list(
+                filter(
+                    None,
+                    p.map(
+                        partial(
+                            extract_lr_hr_patches,
+                            patch_size=patch_size,
+                            upscale=upscale,
+                        ),
+                        img_group,
+                    ),
+                )
+            )
+            lr_img_feat_patches = np.concatenate([x for x, _ in res], axis=0)
+            hr_img_patches = np.concatenate([y for _, y in res], axis=0)
+            if lr_feat_patches is None:
+                lr_feat_patches = lr_img_feat_patches
+                hr_patches = hr_img_patches
+            else:
+                lr_feat_patches = np.append(
+                    lr_feat_patches, lr_img_feat_patches, axis=0
+                )
+                hr_patches = np.append(hr_patches, hr_img_patches, axis=0)
 
     print(f"pca on {lr_feat_patches.shape})")
-    feat_basis, lr_pca_feat_patches = pca(lr_feat_patches)
+
+    p = PCA(whiten=True).fit(lr_feat_patches)
+    feat_basis = p.components_[p.explained_variance_ratio_ > 1e-3].T
+    lr_pca_feat_patches = lr_feat_patches @ feat_basis
+
     print(f"dict on {lr_pca_feat_patches.shape}")
     dico = MiniBatchDictionaryLearning(
-        n_components=dict_size, alpha=dict_alpha, n_jobs=16, verbose=5
+        n_components=dict_size,
+        alpha=dict_alpha,
+        n_jobs=1 if DEBUG else 1,
+        verbose=5,
+        n_iter=1 if DEBUG else 1000,
     ).fit(lr_pca_feat_patches)
     # dico = ApproximateKSVD(n_components=dict_size)
     # dico.fit(lr_pca_feat_patches)
 
     lr_coefficients = dico.transform(lr_pca_feat_patches)
     lr_dict = dico.components_
-    hr_dict = np.linalg.pinv(lr_coefficients) @ hr_patches.T
+    hr_dict = np.linalg.pinv(lr_coefficients) @ hr_patches
     return feat_basis, lr_dict, hr_dict
 
 
@@ -189,6 +199,64 @@ def train_anr(
     return local_projections, lr_dict, hr_dict, feat_basis
 
 
+def train_anr_plus(
+    training_imgs,
+    dict_size=512,
+    regularization_lambda=0.15,
+    patch_size=9,
+    neighborhood_size=40,
+    num_scales=12,
+    scale_factor=0.98,
+    upscale=2,
+):
+    feat_basis, lr_dict, hr_dict = train_anr_dict(
+        training_imgs, patch_size, upscale, dict_size, regularization_lambda
+    )
+    lr_feat_patches = None
+    hr_patches = None
+    for i in range(num_scales):
+        scale = scale_factor ** i
+        for img in training_imgs:
+            hr_img = rescale(
+                img, (scale, scale), order=3, multichannel=len(img.shape) == 3
+            )
+            lr_img_feat_patches, hr_img_patches = extract_lr_hr_patches(
+                hr_img, patch_size, upscale
+            )
+            if lr_feat_patches is None:
+                lr_feat_patches = lr_img_feat_patches
+                hr_patches = hr_img_patches
+            else:
+                lr_feat_patches = np.append(
+                    lr_feat_patches, lr_img_feat_patches, axis=0
+                )
+                hr_patches = np.append(hr_patches, hr_img_patches, axis=0)
+
+    # L2 normalize patches
+    lr_pca_feat_patches, norms = normalize(
+        lr_feat_patches @ feat_basis, axis=1, norm="l2", return_norm=True
+    )
+    hr_patches /= norms[:, np.newaxis]
+
+    local_projections = {}
+    for i, atom in enumerate(lr_dict):
+        distances = distance.cdist(lr_pca_feat_patches, atom[np.newaxis]).squeeze()
+        nearest = distances.argsort()[:neighborhood_size]
+        # columns of neighbors to match the paper
+        lr_neighbors = lr_pca_feat_patches[nearest].T
+        hr_neighbors = hr_patches[nearest].T
+        local_projections[i] = (
+            hr_neighbors
+            @ np.linalg.inv(
+                lr_neighbors.T @ lr_neighbors
+                + regularization_lambda * np.eye(neighborhood_size)
+            )
+            @ lr_neighbors.T
+        )
+
+    return local_projections, lr_dict, hr_dict, feat_basis
+
+
 def plot_gallery(title, images, n_col, n_row, cmap=plt.cm.gray):
     plt.figure(figsize=(2.0 * n_col, 2.26 * n_row))
     plt.suptitle(title, size=16)
@@ -201,27 +269,67 @@ def plot_gallery(title, images, n_col, n_row, cmap=plt.cm.gray):
     plt.subplots_adjust(0.01, 0.05, 0.99, 0.93, 0.04, 0.0)
 
 
-if __name__ == "__main__":
+def test_anr():
+    global DEBUG
+    DEBUG = False
     upscale = 2
-    face_images = datasets.fetch_olivetti_faces().images
-    hr_img = face_images[0]
-    # local_projections, lr_dict, hr_dict, feat_basis = train_anr(
-    #     face_images, upscale=upscale
-    # )
+    # face_images = datasets.fetch_olivetti_faces().images
+    face_images = datasets.fetch_lfw_people().images
+    hr_img = face_images[50]
+    local_projections, lr_dict, hr_dict, feat_basis = train_anr(
+        face_images[: 1 if DEBUG else 1000], upscale=upscale
+    )
 
-    # np.save("local_projections", local_projections)
-    # np.save("lr_dict", lr_dict)
-    # np.save("hr_dict", hr_dict)
-    # np.save("feat_basis", feat_basis)
-    local_projections = np.load("local_projections.npy", allow_pickle=True).item()
-    lr_dict = np.load("lr_dict.npy", allow_pickle=True)
-    hr_dict = np.load("hr_dict.npy", allow_pickle=True)
-    feat_basis = np.load("feat_basis.npy", allow_pickle=True)
+    np.save("local_projections_lfw", local_projections)
+    np.save("lr_dict_lfw", lr_dict)
+    np.save("hr_dict_lfw", hr_dict)
+    np.save("feat_basis_lfw", feat_basis)
+    # local_projections = np.load("local_projections.npy", allow_pickle=True).item()
+    # lr_dict = np.load("lr_dict.npy", allow_pickle=True)
+    # hr_dict = np.load("hr_dict.npy", allow_pickle=True)
+    # feat_basis = np.load("feat_basis.npy", allow_pickle=True)
 
-    lr_img = rescale(hr_img, (1 / upscale, 1 / upscale), order=3)
+    lr_img = rescale(
+        hr_img, (1 / upscale, 1 / upscale), order=3, multichannel=len(hr_img.shape) == 3
+    )
     print(lr_img.shape)
     sr_img = scaleup_anr(
         lr_img, upscale, feat_basis, lr_dict, local_projections, patch_size=9
     )
     plot_gallery("anr", [lr_img, hr_img, sr_img], 3, 1)
     plt.show()
+
+
+def test_anr_plus():
+    global DEBUG
+    DEBUG = True
+    upscale = 2
+    # face_images = datasets.fetch_olivetti_faces().images
+    face_images = datasets.fetch_lfw_people().images
+    hr_img = face_images[50]
+    local_projections, lr_dict, hr_dict, feat_basis = train_anr_plus(
+        face_images[: 1 if DEBUG else 1000], upscale=upscale
+    )
+
+    np.save("local_projections_lfw", local_projections)
+    np.save("lr_dict_lfw", lr_dict)
+    np.save("hr_dict_lfw", hr_dict)
+    np.save("feat_basis_lfw", feat_basis)
+    # local_projections = np.load("local_projections.npy", allow_pickle=True).item()
+    # lr_dict = np.load("lr_dict.npy", allow_pickle=True)
+    # hr_dict = np.load("hr_dict.npy", allow_pickle=True)
+    # feat_basis = np.load("feat_basis.npy", allow_pickle=True)
+
+    lr_img = rescale(
+        hr_img, (1 / upscale, 1 / upscale), order=3, multichannel=len(hr_img.shape) == 3
+    )
+    print(lr_img.shape)
+    sr_img = scaleup_anr(
+        lr_img, upscale, feat_basis, lr_dict, local_projections, patch_size=9
+    )
+    plot_gallery("anr", [lr_img, hr_img, sr_img], 3, 1)
+    plt.show()
+
+
+if __name__ == "__main__":
+    test_anr_plus()
