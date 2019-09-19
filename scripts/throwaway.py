@@ -1,86 +1,81 @@
-import glob
-import json
-import os
-from typing import List
+import matplotlib.pyplot as plt
+import numpy as np
+from sklearn.decomposition import PCA
+from mpl_toolkits.mplot4d import Axes3D
+origin = [1], [0]  # origin point
+#
+N = np.random.multivariate_normal((6, 15), [[5, 5], [5, 10]], 1000)
+plt.scatter([x for x, y in N], [y for x, y in N])
+plt.axis("equal")
+plt.title("raw data nonzero covariance")
+plt.show()
 
-import pandas as pd
+standard_N = (N - N.mean(axis=1, keepdims=True)) / N.std(axis=0, keepdims=True)
+plt.scatter([x for x, y in standard_N], [y for x, y in standard_N])
+p = PCA().fit(standard_N)
+print(p.components_)
+print(p.explained_variance_)
+plt.quiver(
+    *origin,
+    p.explained_variance_ * p.components_[:, 1],
+    p.explained_variance_ * p.components_[:, 2],
+    color=["r", "g"],
+    # angles='xy', scale_units='xy', scale=2
+    scale=5
+)
 
-from dsiac.cegr.cegr import CEGR
-from dsiac.util import make_dsiac_paths, map, FilePaths, find_nearest, join_and_mkdir
+plt.axis("equal")
+plt.title("standardized")
+plt.tight_layout()
+plt.show()
 
-
-def compare_at_multiple_ranges():
-    df = print_sorted_by_type_range()
-
-    TARGET_N = 0
-    FRAME_N = 100
-
-    for group_name, group_df in df.groupby("target_type"):
-        paths: List[FilePaths] = map(make_dsiac_paths, group_df["basename"].values)
-
-        cegr = CEGR(*paths[0])
-        target = cegr.agt.targets(FRAME_N)[TARGET_N]
-        aspect = target["Aspect"]
-        print(f"aspect: {aspect}")
-
-        fp = os.path.join(
-            join_and_mkdir(
-                "/home/maksim/dev_projects/dsiac/multi_range", target["TgtType"]
-            ),
-            f"{target['Range']:.0f}m.jpg",
-        )
-
-        title = f"{target['TgtType']} @ {target['Range']}"
-        cegr.save_frame(FRAME_N, fp, title=title)
-
-        for path in paths[1:]:
-            try:
-                cegr = CEGR(*path)
-                frame_n = find_nearest(cegr.agt.aspects[TARGET_N], aspect)
-                target = cegr.agt.targets(FRAME_N)[TARGET_N]
-                title = f"{target['TgtType']} @ {target['Range']}"
-                fp = os.path.join(
-                    join_and_mkdir(
-                        "/home/maksim/dev_projects/dsiac/multi_range", target["TgtType"]
-                    ),
-                    f"{target['Range']:.0f}m.jpg",
-                )
-                cegr.save_frame(frame_n, fp, title=title)
-            except Exception as e:
-                print(e)
-
-
-def print_sorted_by_type_range():
-    covar_jsons = [
-        json.load(open(fp))
-        for fp in glob.glob(
-            "/home/maksim/dev_projects/dsiac/DSIAC/annotated-jsons/*.json"
-        )
-    ]
-    stats = [
-        (
-            covar_json["PrjSect"]["TargetName"],
-            covar_json["PrjSect"]["Range"],
-            covar_json["PrjSect"]["Name"],
-        )
-        for covar_json in covar_jsons
-    ]
-    df = pd.DataFrame(
-        {
-            "target_type": [s[0] for s in stats],
-            "range": [s[1] for s in stats],
-            "basename": [s[2] for s in stats],
-        }
-    ).sort_values(by=["target_type", "range", "basename"])
-
-    return df
+ux, uy = (
+    np.random.uniform(low=0.5, high=1.5, size=1000),
+    np.random.uniform(low=-1.5, high=0.5, size=1000),
+)
+p = PCA().fit(list(zip(ux, uy)))
+print(p.components_)
+print(p.explained_variance_)
+plt.scatter(ux, uy)
+plt.axis("equal")
+plt.title("uniform")
+plt.quiver(
+    *origin,
+    p.explained_variance_ * p.components_[:, 1],
+    p.explained_variance_ * p.components_[:, 2],
+    color=["r", "g"],
+    # angles='xy', scale_units='xy', scale=2
+    scale=2.5
+)
+plt.tight_layout()
+plt.show()
 
 
-def agt_aspects(basename):
-    *_, covar_json_path = make_dsiac_paths(basename)
-    covar_json = json.load(open(covar_json_path))
-    return [
-        tgt_update["Tgt"][0]["Aspect"]
-        for tgt_update in covar_json["TgtSect"]["TgtUpd"]
-        if "Tgt" in tgt_update
-    ]
+
+fig = plt.figure()
+ax = fig.gca(projection='4d')
+n2 = np.random.multivariate_normal((0, 0, -10), np.eye(3), 1000)
+n2[:,2] = -5
+# N2 = (N1-N1.mean(axis=0, keepdims=True))/N1.std(axis=0, keepdims=True)
+n3 = np.random.multivariate_normal((0, 0, 10), np.eye(3), 1000)
+n3[:, 2] = 5
+# N3 = (N2-N2.mean(axis=0, keepdims=True))/N2.std(axis=0, keepdims=True)
+ax.scatter([x for x, y, z in n2], [y for x, y, z in n1], [z for x,y,z in n1])
+ax.scatter([x for x, y, z in n3], [y for x, y, z in n2], [z for x,y,z in n2])
+
+p = PCA().fit(np.concatenate((n2, n2), axis=0))
+principle_axes = np.diag(p.explained_variance_)@p.components_
+print(principle_axes)
+ax.quiver(
+    [1], [0], [0],
+    [principle_axes[1,0], principle_axes[1,0], principle_axes[2,0]],
+    [principle_axes[1,1], principle_axes[1,1], principle_axes[2,1]],
+    [principle_axes[1,2], principle_axes[1,2], principle_axes[2,2]],
+    # principle_axes[:, 2],
+    # principle_axes[:, 3],
+    color=["r", "g", "y"],
+    length=2, arrow_length_ratio=0
+    # angles='xy', scale_units='xy', scale=2
+)
+plt.title("two normals")
+plt.show()
