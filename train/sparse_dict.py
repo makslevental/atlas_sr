@@ -3,7 +3,7 @@ import numpy as np
 from scipy.signal import convolve2d
 from skimage.transform import rescale
 from sklearn import datasets
-from sklearn.decomposition import MiniBatchDictionaryLearning
+from sklearn.decomposition import MiniBatchDictionaryLearning, PCA
 from sklearn.feature_extraction.image import (
     extract_patches_2d,
     reconstruct_from_patches_2d,
@@ -35,23 +35,6 @@ def extract_feat_patches(img, patch_size):
     return feat_patches
 
 
-def pca(vecs):
-    # vecs is column-wise
-    evals, evecs = np.linalg.eig(vecs @ vecs.T)
-    assert sum(np.abs(evals.conj() - evals)) < 1e-9
-    evals, evecs = (
-        evals.real[evals.real > np.finfo(float).eps],
-        evecs.real[:, evals.real > np.finfo(float).eps],
-    )
-    evals, evecs = evals[evals.argsort()], evecs[:, evals.argsort()]
-    cum_variance = np.cumsum(evals) / np.sum(evals)
-    # top 99% variance retained
-    evecs = evecs[:, cum_variance > 1e-3]
-    assert (np.abs(evecs.conj() - evecs) < np.finfo(float).eps).all()
-    evecs = evecs.real
-    return evecs, vecs.T @ evecs
-
-
 def extract_lr_hr_patches(hr_img, patch_size, upscale):
     lr_img = rescale(
         hr_img, (1 / upscale, 1 / upscale), order=3, multichannel=len(hr_img.shape) == 3
@@ -69,7 +52,7 @@ def extract_lr_hr_patches(hr_img, patch_size, upscale):
     # flatten patches to vectors
     n_patches = hr_patches.shape[0]
     hr_patches = hr_patches.reshape(n_patches, -1)
-    return lr_feat_patches.T, hr_patches.T
+    return lr_feat_patches, hr_patches
 
 
 def norm_patches(lr_patches, hr_patches, threshold=0):
@@ -137,21 +120,25 @@ def train_anr_dict(imgs, patch_size, upscale, dict_size, dict_alpha):
             lr_feat_patches = lr_img_feat_patches
             hr_patches = hr_img_patches
         else:
-            lr_feat_patches = np.append(lr_feat_patches, lr_img_feat_patches, axis=1)
-            hr_patches = np.append(hr_patches, hr_img_patches, axis=1)
+            lr_feat_patches = np.append(lr_feat_patches, lr_img_feat_patches, axis=0)
+            hr_patches = np.append(hr_patches, hr_img_patches, axis=0)
 
     print(f"pca on {lr_feat_patches.shape})")
-    feat_basis, lr_pca_feat_patches = pca(lr_feat_patches)
+
+    p = PCA(whiten=True).fit(lr_feat_patches)
+    feat_basis = p.components_[p.explained_variance_ratio_ > 1e-3].T
+    lr_pca_feat_patches = lr_feat_patches @ feat_basis
+
     print(f"dict on {lr_pca_feat_patches.shape}")
     dico = MiniBatchDictionaryLearning(
-        n_components=dict_size, alpha=dict_alpha, n_jobs=16, verbose=5
+        n_components=dict_size, alpha=dict_alpha, n_jobs=1, verbose=5, n_iter=1
     ).fit(lr_pca_feat_patches)
     # dico = ApproximateKSVD(n_components=dict_size)
     # dico.fit(lr_pca_feat_patches)
 
     lr_coefficients = dico.transform(lr_pca_feat_patches)
     lr_dict = dico.components_
-    hr_dict = np.linalg.pinv(lr_coefficients) @ hr_patches.T
+    hr_dict = np.linalg.pinv(lr_coefficients) @ hr_patches
     return feat_basis, lr_dict, hr_dict
 
 
@@ -205,20 +192,22 @@ if __name__ == "__main__":
     upscale = 2
     face_images = datasets.fetch_olivetti_faces().images
     hr_img = face_images[0]
-    # local_projections, lr_dict, hr_dict, feat_basis = train_anr(
-    #     face_images, upscale=upscale
-    # )
+    local_projections, lr_dict, hr_dict, feat_basis = train_anr(
+        [face_images[0]], upscale=upscale
+    )
 
-    # np.save("local_projections", local_projections)
-    # np.save("lr_dict", lr_dict)
-    # np.save("hr_dict", hr_dict)
-    # np.save("feat_basis", feat_basis)
+    np.save("local_projections", local_projections)
+    np.save("lr_dict", lr_dict)
+    np.save("hr_dict", hr_dict)
+    np.save("feat_basis", feat_basis)
     local_projections = np.load("local_projections.npy", allow_pickle=True).item()
     lr_dict = np.load("lr_dict.npy", allow_pickle=True)
     hr_dict = np.load("hr_dict.npy", allow_pickle=True)
     feat_basis = np.load("feat_basis.npy", allow_pickle=True)
 
-    lr_img = rescale(hr_img, (1 / upscale, 1 / upscale), order=3)
+    lr_img = rescale(
+        hr_img, (1 / upscale, 1 / upscale), order=3, multichannel=len(hr_img.shape) == 3
+    )
     print(lr_img.shape)
     sr_img = scaleup_anr(
         lr_img, upscale, feat_basis, lr_dict, local_projections, patch_size=9
