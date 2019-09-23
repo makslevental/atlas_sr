@@ -25,7 +25,7 @@ markdown==3.1.1           # via tb-nightly
 matplotlib==3.1.1
 mxnet==1.5.0
 networkx==2.3             # via scikit-image
-numpy==1.17.1             # via imageio, matplotlib, mxnet, opencv-python, pandas, pywavelets, scikit-learn, scipy, tb-nightly, torch, torchvision
+numpy==1.17.1             # via imageio, matplotlib, mxnet, opencv-python, pandas, pywavelets, scikit-learn, scipy, sewar, tb-nightly, torch, torchvision
 nvidia-dali==0.12.0
 opencv-python==4.1.0.25
 pandas==0.25.1
@@ -41,9 +41,10 @@ requests==2.22.0          # via mxnet
 scikit-image==0.15.0
 scikit-learn==0.21.3
 scipy==1.3.1
+sewar==0.4.2
 six==1.12.0               # via absl-py, cycler, grpcio, pip-tools, protobuf, python-dateutil, tb-nightly, torchvision
 smmap2==2.0.5             # via gitdb2
-tb-nightly==2.0.0a20190917
+tb-nightly==2.1.0a20190923
 torch==1.2.0
 torchvision==0.4.0
 tqdm==4.35.0
