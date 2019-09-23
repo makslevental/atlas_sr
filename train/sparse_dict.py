@@ -204,7 +204,8 @@ def train_anr_plus(
     dict_size=512,
     regularization_lambda=0.15,
     patch_size=9,
-    neighborhood_size=40,
+    atom_neighborhood_size=40,
+    atom_sample_neighborhood_size=2048,
     num_scales=12,
     scale_factor=0.98,
     upscale=2,
@@ -241,7 +242,7 @@ def train_anr_plus(
     local_projections = {}
     for i, atom in enumerate(lr_dict):
         distances = distance.cdist(lr_pca_feat_patches, atom[np.newaxis]).squeeze()
-        nearest = distances.argsort()[:neighborhood_size]
+        nearest = distances.argsort()[:atom_sample_neighborhood_size]
         # columns of neighbors to match the paper
         lr_neighbors = lr_pca_feat_patches[nearest].T
         hr_neighbors = hr_patches[nearest].T
@@ -249,7 +250,7 @@ def train_anr_plus(
             hr_neighbors
             @ np.linalg.inv(
                 lr_neighbors.T @ lr_neighbors
-                + regularization_lambda * np.eye(neighborhood_size)
+                + regularization_lambda * np.eye(atom_sample_neighborhood_size)
             )
             @ lr_neighbors.T
         )
@@ -270,14 +271,12 @@ def plot_gallery(title, images, n_col, n_row, cmap=plt.cm.gray):
 
 
 def test_anr():
-    global DEBUG
-    DEBUG = False
     upscale = 2
     # face_images = datasets.fetch_olivetti_faces().images
     face_images = datasets.fetch_lfw_people().images
     hr_img = face_images[50]
     local_projections, lr_dict, hr_dict, feat_basis = train_anr(
-        face_images[: 1 if DEBUG else 1000], upscale=upscale
+        face_images[: 1 if DEBUG else 500], upscale=upscale
     )
 
     np.save("local_projections_lfw", local_projections)
@@ -301,20 +300,18 @@ def test_anr():
 
 
 def test_anr_plus():
-    global DEBUG
-    DEBUG = True
     upscale = 2
-    # face_images = datasets.fetch_olivetti_faces().images
-    face_images = datasets.fetch_lfw_people().images
+    face_images = datasets.fetch_olivetti_faces().images
+    # face_images = datasets.fetch_lfw_people().images
     hr_img = face_images[50]
     local_projections, lr_dict, hr_dict, feat_basis = train_anr_plus(
-        face_images[: 1 if DEBUG else 1000], upscale=upscale
+        face_images[: 1 if DEBUG else 100], upscale=upscale
     )
 
-    np.save("local_projections_lfw", local_projections)
-    np.save("lr_dict_lfw", lr_dict)
-    np.save("hr_dict_lfw", hr_dict)
-    np.save("feat_basis_lfw", feat_basis)
+    np.save("local_projections_lfw_aplus", local_projections)
+    np.save("lr_dict_lfw_aplus", lr_dict)
+    np.save("hr_dict_lfw_aplus", hr_dict)
+    np.save("feat_basis_lfw_aplus", feat_basis)
     # local_projections = np.load("local_projections.npy", allow_pickle=True).item()
     # lr_dict = np.load("lr_dict.npy", allow_pickle=True)
     # hr_dict = np.load("hr_dict.npy", allow_pickle=True)
@@ -332,4 +329,5 @@ def test_anr_plus():
 
 
 if __name__ == "__main__":
+    DEBUG = False
     test_anr_plus()

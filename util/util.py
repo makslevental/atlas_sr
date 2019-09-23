@@ -40,8 +40,7 @@ class FilePaths(NamedTuple):
 
 def basename(fp):
     _, fn = os.path.split(fp)
-    base_name, _ext = os.path.splitext(fn)
-    return base_name
+    return os.path.splitext(fn)
 
 
 def find_nearest(array, value):
