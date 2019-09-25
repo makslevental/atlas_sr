@@ -14,6 +14,7 @@ import pandas as pd
 import torch
 import yaml
 from git import Repo
+from scipy import stats
 from torch import Tensor, nn
 from torch.distributed import all_reduce_multigpu, all_reduce
 from torch.nn import ModuleList
@@ -171,7 +172,7 @@ def grouper(iterable, n, fillvalue=None):
 
 
 def save_model(
-        file_path: Union[Path, str], model: nn.Module, opt: Optional[Optimizer] = None
+    file_path: Union[Path, str], model: nn.Module, opt: Optional[Optimizer] = None
 ):
     if rank_distrib():
         return  # don't save if slave proc
@@ -255,14 +256,14 @@ def monkey_patch_bn():
     # https://discuss.pytorch.org/t/training-performance-degrades-with-distributeddataparallel/47152
     # print(inspect.getsource(torch.nn.functional.batch_norm))
     def batch_norm(
-            input,
-            running_mean,
-            running_var,
-            weight=None,
-            bias=None,
-            training=False,
-            momentum=0.1,
-            eps=1e-5,
+        input,
+        running_mean,
+        running_var,
+        weight=None,
+        bias=None,
+        training=False,
+        momentum=0.1,
+        eps=1e-5,
     ):
         if training:
             size = input.size()
@@ -341,9 +342,9 @@ def ndtotext(A, w=None, h=None):
             for i, AA in enumerate(A[:-1]):
                 s += str(AA) + " " * (max(w[i], len(str(AA))) - len(str(AA)) + 1)
             s += (
-                    str(A[-1])
-                    + " " * (max(w[-1], len(str(A[-1]))) - len(str(A[-1])))
-                    + "] "
+                str(A[-1])
+                + " " * (max(w[-1], len(str(A[-1]))) - len(str(A[-1])))
+                + "] "
             )
     elif A.ndim == 2:
         w1 = [max([len(str(s)) for s in A[:, i]]) for i in range(A.shape[1])]
@@ -368,11 +369,14 @@ def ndtopd(arr):
     return df.T
 
 
+def gkern(kernlen=21, nsig=3):
+    """Returns a 2D Gaussian kernel."""
+
+    x = np.linspace(-nsig, nsig, kernlen+1)
+    kern1d = np.diff(stats.norm.cdf(x))
+    kern2d = np.outer(kern1d, kern1d)
+    return kern2d/kern2d.sum()
+
 if __name__ == "__main__":
-    netD = Discriminator()
-    print(list(netD.parameters())[0])
-    netD = load_model_state(
-        netD,
-        os.path.expanduser("~/data/checkpoints/srresnet_voc_2x/netD_epoch_0000.pth"),
-    )
-    print(list(netD.parameters())[0])
+    g = gkern(3, 1)
+    print(g)
