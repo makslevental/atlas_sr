@@ -1,19 +1,17 @@
+import glob
 import os
-from math import log10
+from pathlib import Path
 from shutil import copyfile
 
-import numpy as np
+import matplotlib.pyplot as plt
 import pandas as pd
 import torch
 from PIL import Image
 from PIL.Image import BICUBIC
-from dsiac.cegr.arf import ARF, mad_normalization
-from dsiac.cegr.cegr import CEGR
-from sewar import mse, psnr
+from sewar import psnr
 from torchvision.transforms import ToTensor, ToPILImage, Resize, Compose
+
 from models.SRGAN import Generator
-from util.util import basename
-from dsiac import cegr
 
 
 def test(model_pth_fp, upscale_factor, image):
@@ -25,9 +23,9 @@ def test(model_pth_fp, upscale_factor, image):
 
     with torch.no_grad():
         out = model(image)
-    # out_img = ToPILImage()(out[0].data.cpu())
 
     return out
+    # out_img = ToPILImage()(out[0].data.cpu())
     # fn, ext = basename(image_fp)
     #
     # if not os.path.exists(out_image_dir):
@@ -45,19 +43,10 @@ def get_best_checkpoint(metrics_fp):
     return psnr_max, ssim_max
 
 
-def test_best_checkpoints(
-    model_pth_dir, image_fp, out_image_dir, model_name, upscale_factor
-):
-    metrics_fp = os.path.join(model_pth_dir, "metrics.csv")
-    assert os.path.exists(metrics_fp)
-    psnr_max, ssim_max = get_best_checkpoint(metrics_fp)
-    psnr_max_fp = os.path.join(model_pth_dir, f"netG_epoch_{psnr_max:04}.pth")
-    ssim_max_fp = os.path.join(model_pth_dir, f"netG_epoch_{ssim_max:04}.pth")
-
+def test_best_checkpoints(model_pth_dir, image_fp, upscale_factor):
     image = Image.open(image_fp)
     image_tensor = ToTensor()(image)[:3, :, :].unsqueeze(0)
     w, h = image.size
-    # lr_image = image.resize((w // upscale_factor, h // upscale_factor), BICUBIC)
     r1 = Resize((h // upscale_factor, w // upscale_factor), interpolation=BICUBIC)
     r2 = Resize((h, w), interpolation=BICUBIC)
     lr_image_tensor = Compose([r1, ToTensor()])(image)
@@ -65,77 +54,14 @@ def test_best_checkpoints(
     mr_image_tensor = Compose([r1, r2, ToTensor()])(image)
     mr_image = mr_image_tensor[:3, :, :].unsqueeze(0)
 
-    psnr_img = test(psnr_max_fp, upscale_factor, lr_image_tensor)
-    ssim_img = test(ssim_max_fp, upscale_factor, lr_image_tensor)
-    print(psnr(image_tensor.data.numpy(), psnr_img.data.numpy()))
-    print(psnr(image_tensor.data.numpy(), ssim_img.data.numpy()))
-    print(psnr(image_tensor.data.numpy(), mr_image.data.numpy()))
+    return mr_image, test(model_pth_dir, upscale_factor, lr_image_tensor)
 
 
-if __name__ == "__main__":
-    # for upscale_factor in [2, 4, 8]:
-    #     model_name = "srresnet"
-    #     model_pth = f"/home/maksim/data/checkpoints/{model_name}_imagenet_{upscale_factor}x/netG_epoch_0099.pth"""
-    #     test(
-    #         model_pth,
-    #         upscale_factor=upscale_factor,
-    #         image_fp="/home/maksim/data/DSIAC/dsiac_mad_tiffs/cegr01923_0011/450.tiff",
-    #         out_image_dir="/home/maksim/data/DSIAC/dsiac_mad_tiffs_highres/cegr01923_0011/",
-    #         model_name=model_name
-    #     )
-    # for upscale_factor in [2, 4]:
-    #     model_name = "srgan"
-    #     model_pth = f"/home/maksim/data/checkpoints/{model_name}_imagenet_{upscale_factor}x/netG_epoch_0099.pth"""
-    #     test(
-    #         model_pth,
-    #         upscale_factor=upscale_factor,
-    #         image_fp="/home/maksim/data/DSIAC/dsiac_mad_tiffs/cegr01923_0011/450.tiff",
-    #         out_image_dir="/home/maksim/data/DSIAC/dsiac_mad_tiffs_highres/cegr01923_0011/",
-    #         model_name=model_name
-    #     )
-    #
-    # upscale_factor = 8
-    # model_name = "srgan"
-    # test(
-    #     model_pth,
-    #     upscale_factor=upscale_factor,
-    #     image_fp="/home/maksim/data/DSIAC/dsiac_mad_tiffs/cegr01923_0011/450.tiff",
-    #     out_image_dir="/home/maksim/data/DSIAC/dsiac_mad_tiffs_highres/cegr01923_0011/",
-    #     model_name=model_name
-    # )
-    #
-    # get_best_checkpoint(
-    #     "/home/maksim/data/checkpoints/srresnet_imagenet_2x/metrics.csv"
-    # )
-
-    # upscale_factor = 2
-    # model_name = "srgan"
-    # model_dir = (
-    #     f"/home/maksim/data/checkpoints/{model_name}_imagenet_{upscale_factor}x/"
-    # )
-    # test_best_checkpoints(
-    #     model_dir,
-    #     image_fp="/home/maksim/data/DSIAC/dsiac_mad_tiffs/cegr01923_0011/450.tiff",
-    #     out_image_dir="/home/maksim/data/DSIAC/dsiac_mad_tiffs_highres/cegr01923_0011/",
-    #     model_name=model_name,
-    #     upscale_factor=upscale_factor,
-    # )
-
-    # cegr = CEGR(
-    #     "/home/maksim/data/DSIAC/cegr/arf/cegr01923_0011.arf",
-    #     "/home/maksim/data/DSIAC/cegr/agt/cegr01923_0011.agt",
-    #     "/home/maksim/data/DSIAC/Metric/cegr01923_0011.bbox_met"
-    # )
-    # print(cegr.bboxes(450))
-    # arf = ARF("/home/maksim/data/DSIAC/cegr/arf/cegr01923_0011.arf")
-    #
-    # arf_frame = arf.get_frame_mat(450)
-    # clipped_and_normed = np.clip(mad_normalization(arf_frame), -20, 20)
-    # print(clipped_and_normed)
+def copy_checkpoints():
     model_name = "srgan_imagenet"
     upscale_factor = 2
     for model_name in ["srgan_imagenet", "srresnet_imagenet"]:
-        for upscale_factor in [2,4,8]:
+        for upscale_factor in [2, 4, 8]:
             dir_path = f"/home/maksim/data/checkpoints/{model_name}_{upscale_factor}x"
             psnr, ssim = get_best_checkpoint(f"{dir_path}/metrics.csv")
             copyfile(
@@ -146,5 +72,136 @@ if __name__ == "__main__":
                 f"{dir_path}/netG_epoch_{ssim:04}.pth",
                 f"/home/maksim/dev_projects/atlas_sr/checkpoints/{model_name}_{upscale_factor}x_ssim_{ssim:04}.pth",
             )
-            copyfile(f"{dir_path}/metrics.csv", f"/home/maksim/dev_projects/atlas_sr/checkpoints/{model_name}_{upscale_factor}x.csv")
+            copyfile(
+                f"{dir_path}/metrics.csv",
+                f"/home/maksim/dev_projects/atlas_sr/checkpoints/{model_name}_{upscale_factor}x.csv",
+            )
 
+
+def save_tensor_as_img(ten, out_fp):
+    out_img = ToPILImage()(ten[0].data.cpu())
+    out_dir = os.path.split(out_fp)[0]
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir)
+    out_img.save(out_fp)
+
+
+def upscale_img(img_fp, upscaled_dir, box, crop=False):
+    if not os.path.exists(upscaled_dir):
+        os.makedirs(upscaled_dir)
+    for upscale in [2, 4, 8]:
+        for model_name in ["srgan", "srresnet"]:
+            hr_image = Image.open(img_fp)
+            model_checkpoint_fp = glob.glob(
+                f"/home/maksim/dev_projects/atlas_sr/checkpoints/{model_name}_imagenet_{upscale}x_psnr_*.pth"
+            )[0]
+            mr_image_tensor, sr_image_tensor = test_best_checkpoints(
+                model_checkpoint_fp, img_fp, upscale
+            )
+
+            sr_image_tensor = sr_image_tensor[:3, :, :].squeeze(0)
+            mr_image_tensor = mr_image_tensor[:3, :, :].squeeze(0)
+            hr_image_tensor = ToTensor()(hr_image)[:3, :, :]
+
+            mr_psnr = psnr(hr_image_tensor.data.numpy(), mr_image_tensor.data.numpy())
+            sr_psnr = psnr(hr_image_tensor.data.numpy(), sr_image_tensor.data.numpy())
+
+            mr_image = ToPILImage()(mr_image_tensor.data.cpu())
+            sr_image = ToPILImage()(sr_image_tensor.data.cpu())
+
+            mr_image.save(upscaled_dir / f"full_bicubic_{upscale}x_{mr_psnr:.3f}.png")
+            sr_image.save(
+                upscaled_dir
+                / f"full_{model_name}_imagenet_{upscale}x_{sr_psnr:.3f}.png"
+            )
+            hr_image.save(upscaled_dir / "full_hr.png")
+            if crop:
+                hr_image = hr_image.crop(box=box)
+                sr_image = sr_image.crop(box=box)
+                mr_image = mr_image.crop(box=box)
+
+                mr_psnr = psnr(
+                    ToTensor()(hr_image).data.numpy()[:3],
+                    ToTensor()(mr_image).data.numpy(),
+                )
+                sr_psnr = psnr(
+                    ToTensor()(hr_image).data.numpy()[:3],
+                    ToTensor()(sr_image).data.numpy(),
+                )
+
+                hr_image.save(upscaled_dir / "cropped_hr.png")
+                mr_image.save(
+                    upscaled_dir / f"cropped_bicubic_{upscale}x_{mr_psnr:.3f}.png"
+                )
+                sr_image.save(
+                    upscaled_dir
+                    / f"cropped_{model_name}_imagenet_{upscale}x_{sr_psnr:.3f}.png"
+                )
+
+
+def plot_metrics_srgan(metrics_fp, title=""):
+    df = pd.read_csv(metrics_fp)
+
+    fig, ax1 = plt.subplots()
+    epochs = range(len(df))
+
+    color = "tab:red"
+    ax1.set_xlabel("epoch")
+    ax1.set_ylabel("psnr", color=color)
+    l1 = ax1.plot(epochs, df["psnr.val"].values, color=color, label="psnr")
+    ax1.tick_params(axis="y", labelcolor=color)
+
+    ax2 = ax1.twinx()  # instantiate a second axes that shares the same x-axis
+
+    color = "tab:blue"
+    ax2.set_ylabel("score")  # we already handled the x-label with ax1
+    l2 = ax2.plot(epochs, df["g_score.avg"], color=color, label="g score")
+    # ax2.tick_params(axis='y', labelcolor=color)
+
+    ax3 = ax1.twinx()  # instantiate a second axes that shares the same x-axis
+
+    color = "tab:green"
+    # ax3.set_ylabel('d_loss', color=color)  # we already handled the x-label with ax1
+    l3 = ax3.plot(epochs, df["d_score.avg"], color=color, label="d score")
+    lns = l1 + l2 + l3
+    labs = [l.get_label() for l in lns]
+    ax3.legend(lns, labs, loc=0)
+    ax3.get_yaxis().set_ticks([])
+    ax3.set_title(title)
+    fig.tight_layout()  # otherwise the right y-label is slightly clipped
+    plt.show()
+
+
+def plot_metrics_srresnet(metrics_fp, title=""):
+    df = pd.read_csv(metrics_fp)
+
+    fig, ax1 = plt.subplots()
+    epochs = range(len(df))
+
+    color = "tab:red"
+    ax1.set_xlabel("epoch")
+    ax1.set_ylabel("psnr", color=color)
+    l1 = ax1.plot(epochs, df["psnr.val"].values, color=color, label="psnr")
+    ax1.tick_params(axis="y", labelcolor=color)
+
+    ax3 = ax1.twinx()  # instantiate a second axes that shares the same x-axis
+
+    color = "tab:green"
+    ax3.set_ylabel('loss', color=color)  # we already handled the x-label with ax1
+    l3 = ax3.plot(epochs, df["g_loss.avg"], color=color, label="g loss")
+    lns = l1 + l3
+    labs = [l.get_label() for l in lns]
+    ax3.legend(lns, labs, loc=0)
+    # ax3.get_yaxis().set_ticks([])
+    ax3.tick_params(axis='y', labelcolor=color)
+
+    ax3.set_title(title)
+    fig.tight_layout()  # otherwise the right y-label is slightly clipped
+    plt.show()
+
+
+if __name__ == "__main__":
+    box = (260, 255, 308, 277)
+    img_fp = "/home/maksim/data/DSIAC/dsiac_mad_tiffs/cegr02003_0002/1650.tiff"
+    upscaled_dir = Path("/home/maksim/data/DSIAC/upscaled/cegr02003_0002/")
+    upscale_img(img_fp, upscaled_dir, box, crop=True)
