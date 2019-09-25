@@ -54,7 +54,7 @@ def test_best_checkpoints(model_pth_dir, image_fp, upscale_factor):
     mr_image_tensor = Compose([r1, r2, ToTensor()])(image)
     mr_image = mr_image_tensor[:3, :, :].unsqueeze(0)
 
-    return mr_image, test(model_pth_dir, upscale_factor, lr_image_tensor)
+    return mr_image, test(model_pth_dir, upscale_factor, lr_image_tensor), test(model_pth_dir, upscale_factor, image_tensor)
 
 
 def copy_checkpoints():
@@ -95,12 +95,13 @@ def upscale_img(img_fp, upscaled_dir, box, crop=False):
             model_checkpoint_fp = glob.glob(
                 f"/home/maksim/dev_projects/atlas_sr/checkpoints/{model_name}_imagenet_{upscale}x_psnr_*.pth"
             )[0]
-            mr_image_tensor, sr_image_tensor = test_best_checkpoints(
+            mr_image_tensor, sr_image_tensor, upscaled_tensor = test_best_checkpoints(
                 model_checkpoint_fp, img_fp, upscale
             )
 
             sr_image_tensor = sr_image_tensor[:3, :, :].squeeze(0)
             mr_image_tensor = mr_image_tensor[:3, :, :].squeeze(0)
+            upscaled_tensor = upscaled_tensor[:3, :, :].squeeze(0)
             hr_image_tensor = ToTensor()(hr_image)[:3, :, :]
 
             mr_psnr = psnr(hr_image_tensor.data.numpy(), mr_image_tensor.data.numpy())
@@ -108,6 +109,7 @@ def upscale_img(img_fp, upscaled_dir, box, crop=False):
 
             mr_image = ToPILImage()(mr_image_tensor.data.cpu())
             sr_image = ToPILImage()(sr_image_tensor.data.cpu())
+            upscaled_image = ToPILImage()(upscaled_tensor.cpu())
 
             mr_image.save(upscaled_dir / f"full_bicubic_{upscale}x_{mr_psnr:.3f}.png")
             sr_image.save(
@@ -115,6 +117,7 @@ def upscale_img(img_fp, upscaled_dir, box, crop=False):
                 / f"full_{model_name}_imagenet_{upscale}x_{sr_psnr:.3f}.png"
             )
             hr_image.save(upscaled_dir / "full_hr.png")
+            upscaled_image.save(upscaled_dir/f"{upscale}x.png")
             if crop:
                 hr_image = hr_image.crop(box=box)
                 sr_image = sr_image.crop(box=box)
@@ -202,6 +205,6 @@ def plot_metrics_srresnet(metrics_fp, title=""):
 
 if __name__ == "__main__":
     box = (260, 255, 308, 277)
-    img_fp = "/home/maksim/data/DSIAC/dsiac_mad_tiffs/cegr02003_0002/1650.tiff"
-    upscaled_dir = Path("/home/maksim/data/DSIAC/upscaled/cegr02003_0002/")
+    img_fp = "/home/maksim/data/DSIAC/dsiac_mad_tiffs/cegr01925_0002/330.tiff"
+    upscaled_dir = Path("/home/maksim/data/DSIAC/upscaled/cegr01925_0002/")
     upscale_img(img_fp, upscaled_dir, box, crop=True)
