@@ -3,7 +3,6 @@ import sys
 
 import numpy as np
 from PIL.Image import BICUBIC
-from sewar import psnr
 
 from util.util import show_im
 
