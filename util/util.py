@@ -6,12 +6,13 @@ import sys
 import zipfile
 from collections import OrderedDict
 from itertools import zip_longest
+from math import sqrt
 from pathlib import Path
 from pprint import pprint
 from typing import NamedTuple, Any, List, Callable, Collection, Union, Optional
 
 import matplotlib.pyplot as plt
-import numpy as np
+import numpy
 import pandas as pd
 import torch
 import yaml
@@ -46,8 +47,8 @@ def basename(fp):
 
 
 def find_nearest(array, value):
-    array = np.asarray(array)
-    idx = (np.abs(array - value)).argmin()
+    array = numpy.asarray(array)
+    idx = (numpy.abs(array - value)).argmin()
     return idx
 
 
@@ -108,11 +109,11 @@ def first_el(x: Any) -> Any:
     return x
 
 
-def even_multiples(start: float, stop: float, n: int) -> np.ndarray:
+def even_multiples(start: float, stop: float, n: int) -> numpy.ndarray:
     "Build log-stepped array from `start` to `stop` in `n` steps."
     mult = stop / start
     step = mult ** (1 / (n - 1))
-    return np.array([start * (step ** i) for i in range(n)])
+    return numpy.array([start * (step ** i) for i in range(n)])
 
 
 def trainable_params(m: nn.Module) -> ParamList:
@@ -154,7 +155,7 @@ def is_pool_type(l: Callable):
     return re.search(r"Pool[123]d$", l.__class__.__name__)
 
 
-def lr_range(lr: Union[float, slice], layer_groups: ModuleList) -> np.ndarray:
+def lr_range(lr: Union[float, slice], layer_groups: ModuleList) -> numpy.ndarray:
     "Build differential learning rates from `lr`."
     if not isinstance(lr, slice):
         return lr
@@ -162,7 +163,7 @@ def lr_range(lr: Union[float, slice], layer_groups: ModuleList) -> np.ndarray:
         res = even_multiples(lr.start, lr.stop, len(layer_groups))
     else:
         res = [lr.stop / 10] * (len(layer_groups) - 1) + [lr.stop]
-    return np.array(res)
+    return numpy.array(res)
 
 
 def grouper(iterable, n, fillvalue=None):
@@ -173,7 +174,7 @@ def grouper(iterable, n, fillvalue=None):
 
 
 def save_model(
-        file_path: Union[Path, str], model: nn.Module, opt: Optional[Optimizer] = None
+    file_path: Union[Path, str], model: nn.Module, opt: Optional[Optimizer] = None
 ):
     if rank_distrib():
         return  # don't save if slave proc
@@ -315,9 +316,9 @@ def ndtotext(A, w=None, h=None):
             for i, AA in enumerate(A[:-1]):
                 s += str(AA) + " " * (max(w[i], len(str(AA))) - len(str(AA)) + 1)
             s += (
-                    str(A[-1])
-                    + " " * (max(w[-1], len(str(A[-1]))) - len(str(A[-1])))
-                    + "] "
+                str(A[-1])
+                + " " * (max(w[-1], len(str(A[-1]))) - len(str(A[-1])))
+                + "] "
             )
     elif A.ndim == 2:
         w1 = [max([len(str(s)) for s in A[:, i]]) for i in range(A.shape[1])]
@@ -345,9 +346,9 @@ def ndtopd(arr):
 def gkern(kernlen=21, nsig=3):
     """Returns a 2D Gaussian kernel."""
 
-    x = np.linspace(-nsig, nsig, kernlen + 1)
-    kern1d = np.diff(stats.norm.cdf(x))
-    kern2d = np.outer(kern1d, kern1d)
+    x = numpy.linspace(-nsig, nsig, kernlen + 1)
+    kern1d = numpy.diff(stats.norm.cdf(x))
+    kern2d = numpy.outer(kern1d, kern1d)
     return kern2d / kern2d.sum()
 
 
