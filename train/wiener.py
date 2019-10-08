@@ -4,7 +4,7 @@ import sys
 import numpy as np
 from PIL.Image import BICUBIC
 
-from util.util import show_im
+from util.util import show_mat
 
 np.set_printoptions(threshold=sys.maxsize)
 from PIL import Image
@@ -155,16 +155,16 @@ def main():
         [np.array(im.resize((w // upscale, h // upscale), BICUBIC)) for im in images],
         shifts,
     )
-    show_im(sr, 30, "sr")
+    show_mat(sr, 30, "sr")
 
     for i, im in enumerate(images):
         hr = np.array(im)
-        # show_im(hr, 30, f"hr {i}")
+        # show_mat(hr, 30, f"hr {i}")
 
         mr = np.array(
             im.resize((w // upscale, h // upscale), BICUBIC).resize((w, h), BICUBIC)
         )
-        show_im(mr, 30, f"mr {i}")
+        show_mat(mr, 30, f"mr {i}")
         # print("bicubic", psnr(hr, mr))
         # print("sr", psnr(hr, sr))
 
