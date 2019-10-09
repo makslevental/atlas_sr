@@ -11,11 +11,25 @@ from util.util import load_model_state
 
 
 class EDSR(nn.Module):
-    def __init__(self, scale, n_resblocks, n_feats, n_colors=3, res_scale=1):
+    def __init__(
+        self,
+        scale,
+        n_resblocks,
+        n_feats,
+        n_colors=3,
+        res_scale=1,
+        rgb_range=255,
+        rgb_mean=(0.4488, 0.4371, 0.4040),
+        rgb_std=(1, 1, 1),
+    ):
         super(EDSR, self).__init__()
         kernel_size = 3
-        self.sub_mean = MeanShift()
-        self.add_mean = MeanShift(sign=1)
+        self.sub_mean = MeanShift(
+            sign=-1, rgb_range=rgb_range, rgb_mean=rgb_mean, rgb_std=rgb_std
+        )
+        self.add_mean = MeanShift(
+            sign=1, rgb_range=rgb_range, rgb_mean=rgb_mean, rgb_std=rgb_std
+        )
 
         # define head module
         m_head = [default_conv(n_colors, n_feats, kernel_size)]
@@ -55,7 +69,7 @@ if __name__ == "__main__":
     n_resblocks = 32
     n_feats = 256
     e = EDSR(upscale_factor, n_resblocks, n_feats, res_scale=0.1)
-    load_model_state(e, "/home/maksim/dev_projects/atlas_sr/train/edsr_2x.pt")
+    load_model_state(e, "/home/maksim/data/checkpoints/dbpn_checkpoints/edsr_x2.pt")
     image = Image.open(
         "/home/maksim/data/DSIAC/dsiac_mad_tiffs/cegr01923_0011/420.tiff"
     )
@@ -66,7 +80,7 @@ if __name__ == "__main__":
     w, h = image.size
     r1 = Resize((h // upscale_factor, w // upscale_factor), interpolation=BICUBIC)
     image = r1(image)
-    image_tensor = ToTensor()(image)[:3] * 255
+    image_tensor = ToTensor()(image)[:3]
     sr = e(image_tensor.unsqueeze(0)).squeeze(0).permute((1, 2, 0)).data.numpy() / 255
 
     pyplot.imshow(sr)

@@ -6,11 +6,11 @@ import sys
 import zipfile
 from collections import OrderedDict
 from itertools import zip_longest
-from math import sqrt
 from pathlib import Path
 from pprint import pprint
 from typing import NamedTuple, Any, List, Callable, Collection, Union, Optional
 
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy
 import pandas as pd
@@ -344,19 +344,21 @@ def ndtopd(arr):
 
 
 def gkern(kernlen=21, nsig=3):
-    """Returns a 2D Gaussian kernel."""
-
     x = numpy.linspace(-nsig, nsig, kernlen + 1)
     kern1d = numpy.diff(stats.norm.cdf(x))
     kern2d = numpy.outer(kern1d, kern1d)
     return kern2d / kern2d.sum()
 
 
-def show_im(im, figsize=10, title=""):
-    plt.figure(figsize=(figsize, figsize))
-    plt.imshow(im)
-    plt.title(title, fontsize=figsize)
-    plt.show(block=False)
+def show_im(im, title="", dpi=96, height=1, cmap=None):
+    px, py = im.shape
+    fig = plt.figure(figsize=(py / numpy.float(dpi), px / numpy.float(dpi)))
+    ax = fig.add_axes([0.0, 0.0, 1.0, height], yticks=[], xticks=[], frame_on=False)
+    norm = matplotlib.colors.Normalize(vmin=im.min(), vmax=im.max())
+    ax.imshow(im, cmap=cmap, norm=norm)
+    ax.set_title(title)
+    fig.show()
+    return fig
 
 
 def save_im(im, fp, figsize=10):
@@ -368,6 +370,21 @@ def save_im(im, fp, figsize=10):
 class objectview:
     def __init__(self, d):
         self.__dict__ = d
+
+
+def linear_scale(x, vmin=None, vmax=None, rescale=1, bias=0):
+    if vmin is None:
+        vmin = x.min()
+    if vmax is None:
+        vmax = x.max()
+    x -= vmin
+    x = x / (vmax - vmin)
+    x = x * rescale
+    return x + bias, vmin.item(), vmax.item()
+
+
+def linear_unscale(x, bias, rescale, vmin, vmax):
+    return ((x - bias) / rescale) * (vmax - vmin) + vmin
 
 
 if __name__ == "__main__":

@@ -24,16 +24,7 @@ if __name__ == "__main__":
         )
         dpnn = dpnn.to("cuda")
 
-        n_resblocks = 32
-        n_feats = 256
-        e = EDSR(upscale_factor, n_resblocks, n_feats, res_scale=0.1)
-        load_model_state(e, "/home/maksim/dev_projects/atlas_sr/checkpoints/edsr_x2.pt")
 
-        e = e.to("cuda")
-        load_model_state(
-            dpnn,
-            "/home/maksim/dev_projects/atlas_sr/checkpoints/DBPN-RES-MR64-3_2x.pth",
-        )
         # hr = Image.open("/home/maksim/dev_projects/atlas_sr/bb_test.tiff")
         # image_np = numpy.asarray(hr)
         #

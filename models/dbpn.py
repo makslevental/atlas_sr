@@ -1,25 +1,12 @@
-import argparse
-import glob
 import math
-import os
 from functools import reduce
 
-import matplotlib
-import numpy
-import pandas
 import torch
 import torch.nn as nn
-from dsiac.cegr.arf import mad_normalize, ARF, make_arf
-from matplotlib import pyplot
-from matplotlib.colors import LinearSegmentedColormap
 from torch.autograd import Variable
-from torch.nn.functional import interpolate
 from torch.utils.data import DataLoader
-from torchvision.transforms import transforms, Lambda
-from tqdm import tqdm
 
-from data_utils.cegr import ARFDataset, torch_mad_normalize
-from util.util import load_model_state, show_im, basename
+from data_utils.cegr import ARFDataset
 
 
 class DenseBlock(torch.nn.Module):
@@ -782,120 +769,12 @@ def x8_forward(img, model):
     return output
 
 
-def linear_scale(x, vmin=None, vmax=None, rescale=None):
-    if vmin is None:
-        vmin = x.min()
-    if vmax is None:
-        vmax = x.max()
-    x -= vmin
-    x /= vmax - vmin
-    if rescale is not None:
-        x *= rescale
-    return x
-
-
 def make_dataloader(arf_fp):
-    transformed_dataset = ARFDataset(
-        arf_fp,
-        transform=transforms.Compose(
-            [
-                # Lambda(lambda x: torch_mad_normalize(x)),
-                # Lambda(lambda x: torch.clamp(x, -20, 20)),
-                Lambda(lambda x: linear_scale(x, vmin=0, vmax=2 ** 16 - 1)),
-                Lambda(lambda x: torch.stack([x, x, x])),
-                # transforms.Normalize(
-                #     mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-                # ),
-            ]
-        ),
-    )
+    rescale = 1.04 - 0.79
+    bias = 0.79
+    transformed_dataset = ARFDataset(arf_fp)
     _, h, w = transformed_dataset[0].size()
     dataloader = DataLoader(
         transformed_dataset, batch_size=1, shuffle=False, num_workers=1
     )
     return dataloader, w, h
-
-
-def main():
-    df = pandas.read_csv("tgts.csv")
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--local_rank", type=int, default=0)
-    parser.add_argument("--frame_rate", type=int, default=1)
-    parser.add_argument("--upscale_factor", type=int, default=2)
-    args = parser.parse_args()
-
-    local_rank = args.local_rank
-    upscale_factor = args.upscale_factor
-    frame_rate = args.frame_rate
-
-    world_size = int(os.environ.get("WORLD_SIZE", 1))
-    print(args.local_rank, world_size)
-    with torch.cuda.device(local_rank):
-        with torch.no_grad():
-            model = DBPNITER(
-                num_channels=3,
-                base_filter=64,
-                feat=256,
-                num_stages=3,
-                scale_factor=upscale_factor,
-            )
-            load_model_state(
-                model,
-                "/home/maksim/dev_projects/atlas_sr/checkpoints/DBPN-RES-MR64-3_2x.pth",
-            )
-            model = model.to("cuda")
-            # print(next(model.parameters()).device)
-            # for arf_fp in sorted(glob.glob("/home/maksim/data/DSIAC/cegr/arf/*.arf")):
-            for scenario in tqdm(
-                sorted(df["scenario"][args.local_rank :: world_size]),
-                f"rank {local_rank} scenario",
-            ):
-                arf_fp = f"/home/maksim/data/DSIAC/cegr/arf/{scenario}.arf"
-                new_arf_fp = f"/media/maksim/3125372135FE0CCE/dbpn/{basename(arf_fp)[0]}_{upscale_factor}x.arf"
-                if os.path.exists(new_arf_fp):
-                    continue
-                print(new_arf_fp)
-                dataloader, w, h = make_dataloader(arf_fp)
-                n_frames = len(dataloader) // frame_rate
-                if n_frames == 0:
-                    continue
-                print(n_frames)
-                new_arf = make_arf(
-                    new_arf_fp,
-                    height=upscale_factor * h,
-                    width=upscale_factor * w,
-                    n_frames=n_frames,
-                )
-                for i_batch, frame in tqdm(
-                    enumerate(dataloader), f"rank {local_rank} frame"
-                ):
-                    if i_batch % frame_rate:
-                        continue
-                    print(i_batch)
-                    frame = frame.to("cuda")
-                    bicubic = interpolate(
-                        frame,
-                        scale_factor=(upscale_factor, upscale_factor),
-                        mode="bicubic",
-                        align_corners=True,
-                    )
-                    out = model(frame)
-                    # out = chop_forward(frame, model, upscale_factor, self_ensemble=True)
-                    # out = x8_forward(frame, model)
-                    # sr = denorm(out + bicubic)
-                    sr = out + bicubic
-
-                    # show_im(frame.squeeze(0).mean(dim=0).cpu().numpy())
-                    # show_im(bicubic.squeeze(0).mean(dim=0).cpu().numpy())
-                    # show_im(out.squeeze(0).mean(dim=0).cpu().numpy())
-                    # show_im(sr.squeeze(0).mean(dim=0).cpu().numpy())
-                    sr = sr.squeeze(0).mean(dim=0).cpu().numpy()
-                    # show_im(sr)
-                    new_arf[i_batch // frame_rate] = (
-                        (sr * 2 ** 16 - 1).astype(numpy.uint16).byteswap()
-                    )
-                    new_arf.flush()
-                break
-
-if __name__ == "__main__":
-    main()
