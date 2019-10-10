@@ -6,40 +6,12 @@ import pandas
 import torch
 from dsiac.cegr.arf import make_arf
 from matplotlib import pyplot
-from sewar import psnr
-from sewar.command_line import metrics
 from torch.nn.functional import interpolate
 from torch.utils.data import DataLoader
-from torchvision import transforms
-from torchvision.transforms import Lambda
 
 from data_utils.cegr import ARFDataset
 from models.edsr import EDSR
-from util.util import load_model_state, show_im, linear_scale, linear_unscale
-
-
-def make_dataloader(arf_fp):
-    transformed_dataset = ARFDataset(
-        arf_fp,
-        transform=transforms.Compose(
-            [
-                # Lambda(lambda x: torch_mad_normalize(x)),
-                # Lambda(lambda x: torch.clamp(x, -20, 20)),
-                Lambda(
-                    lambda x: linear_scale(x, vmin=0, vmax=2 ** 16 - 1, rescale=255)
-                ),
-                Lambda(lambda x: torch.stack([x, x, x])),
-                # transforms.Normalize(
-                #     mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-                # ),
-            ]
-        ),
-    )
-    _, h, w = transformed_dataset[0].size()
-    dataloader = DataLoader(
-        transformed_dataset, batch_size=1, shuffle=False, num_workers=1
-    )
-    return dataloader, w, h
+from util.util import load_model_state, show_im, linear_unscale
 
 
 def test_grid():
@@ -75,9 +47,6 @@ def test_grid():
                     # grid3 = scale * torch.ones((3, 100, 100))
                     out = model(grid3.unsqueeze(0).to("cuda"))
                     sr = out.squeeze(0).mean(dim=0).cpu().numpy()
-                    p = psnr(numpy.tile(grid, (20, 20)) * scale, sr)
-                    print(j, p, numpy.median(sr))
-                    ax.set_title(f"{scale:.2f} {p:.3f}")
                     # print(sr.min(), sr.max())
                     ax.imshow(sr)
                     # show_im(sr, title=f"{i/10}", height=.9, cmap="gray")
@@ -131,7 +100,7 @@ def main():
             load_model_state(model, model_fp)
             model = model.to("cuda")
 
-            for scenario in sorted(df["scenario"][args.local_rank :: world_size]):
+            for scenario in sorted(df["scenario"][args.local_rank:: world_size]):
                 arf_fp = f"{arf_dirp}/{scenario}.arf"
                 new_arf_fp = f"{new_arf_dirp}/{scenario}_{upscale_factor}x.arf"
                 if os.path.exists(new_arf_fp):
@@ -173,7 +142,6 @@ def main():
 
 
 def experiment_dataset():
-    metrics.pop("rmse_sw")
     upscale_factor = 2
     bias = 0
     rescale = 255
