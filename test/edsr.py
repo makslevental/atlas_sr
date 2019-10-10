@@ -135,10 +135,6 @@ def main():
                     sr = linear_unscale(sr, bias, rescale, vmin.item(), vmax.item())
                     new_arf[i_batch // frame_rate] = sr.astype(numpy.uint16).byteswap()
                     new_arf.flush()
-                    break
-                break
-    show_im(frame.squeeze().cpu().numpy()[0])
-    show_im(sr)
 
 
 def experiment_dataset():
