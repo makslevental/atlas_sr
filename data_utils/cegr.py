@@ -13,7 +13,7 @@ def torch_mad_normalize(x, scale=1.4826):
 
 
 class ARFDataset(Dataset):
-    def __init__(self, arf_fp, rescale, bias):
+    def __init__(self, arf_fp, rescale=1, bias=0):
         self.rescale = rescale
         self.bias = bias
         self.arf = ARF(arf_fp)

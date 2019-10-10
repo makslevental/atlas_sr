@@ -87,6 +87,8 @@ def main():
                 for i_batch, (frame, vmin, vmax) in enumerate(dataloader):
                     if i_batch % frame_rate:
                         continue
+                    if not i_batch % 20:
+                        print(scenario, i_batch)
                     print(i_batch)
                     frame = frame.to("cuda")
                     bicubic = interpolate(

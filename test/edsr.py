@@ -6,7 +6,6 @@ import pandas
 import torch
 from dsiac.cegr.arf import make_arf
 from matplotlib import pyplot
-from scipy.stats import median_absolute_deviation as mad
 from sewar import psnr
 from sewar.command_line import metrics
 from torch.nn.functional import interpolate
@@ -14,9 +13,9 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from torchvision.transforms import Lambda
 
-from data_utils.cegr import ARFDataset, torch_mad_normalize
+from data_utils.cegr import ARFDataset
 from models.edsr import EDSR
-from util.util import load_model_state, show_im, linear_scale
+from util.util import load_model_state, show_im, linear_scale, linear_unscale
 
 
 def make_dataloader(arf_fp):
@@ -66,17 +65,17 @@ def test_grid():
                     ax = axs[j]
                     ax.set_axis_off()
 
-                    grid = (i/10)*interpolate(
+                    grid = (i / 10) * interpolate(
                         torch.Tensor([[1, 0], [0, 1]]).unsqueeze(0).unsqueeze(0),
                         scale_factor=(k, k),
                     ).numpy().squeeze(0).squeeze(0)
                     grid2 = torch.from_numpy(numpy.tile(grid, (10, 10)))
                     grid3 = torch.stack([grid2, grid2, grid2])
-                    
+
                     # grid3 = scale * torch.ones((3, 100, 100))
                     out = model(grid3.unsqueeze(0).to("cuda"))
                     sr = out.squeeze(0).mean(dim=0).cpu().numpy()
-                    p = psnr(numpy.tile(grid, (20, 20))*scale, sr)
+                    p = psnr(numpy.tile(grid, (20, 20)) * scale, sr)
                     print(j, p, numpy.median(sr))
                     ax.set_title(f"{scale:.2f} {p:.3f}")
                     # print(sr.min(), sr.max())
@@ -114,6 +113,8 @@ def main():
     new_arf_dirp = os.path.expanduser(args.new_arf_dirp)
     n_resblocks = 32
     n_feats = 256
+    rescale = 255
+    bias = 0
 
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     print(args.local_rank, world_size)
@@ -124,8 +125,8 @@ def main():
                 n_resblocks,
                 n_feats,
                 res_scale=0.1,
-                rgb_range=2 ** 16 - 1,
-                # rgb_mean=(0, 0, 0)
+                rgb_mean=(0, 0, 0),
+                rgb_std=(1, 1, 1),
             )
             load_model_state(model, model_fp)
             model = model.to("cuda")
@@ -136,27 +137,34 @@ def main():
                 if os.path.exists(new_arf_fp):
                     continue
                 print(new_arf_fp)
-                dataloader, w, h = make_dataloader(arf_fp)
+
+                transformed_dataset = ARFDataset(arf_fp, rescale=rescale, bias=bias)
+                frame, _, _ = transformed_dataset[0]
+                _, h, w = frame.size()
+                dataloader = DataLoader(
+                    transformed_dataset, batch_size=1, shuffle=False, num_workers=1
+                )
+
                 n_frames = len(dataloader) // frame_rate
                 if n_frames == 0:
                     continue
-                print(n_frames)
                 new_arf = make_arf(
                     new_arf_fp,
                     height=upscale_factor * h,
                     width=upscale_factor * w,
                     n_frames=n_frames,
                 )
-                for i_batch, frame in enumerate(dataloader):
+                for i_batch, (frame, vmin, vmax) in enumerate(dataloader):
                     if i_batch % frame_rate:
                         continue
+                    if not i_batch % 20:
+                        print(scenario, i_batch)
                     print(i_batch)
                     frame = frame.to("cuda")
                     sr = model(frame)
                     sr = sr.squeeze(0).mean(dim=0).cpu().numpy()
-                    new_arf[i_batch // frame_rate] = (
-                        (sr * 2 ** 16 - 1).astype(numpy.uint16).byteswap()
-                    )
+                    sr = linear_unscale(sr, bias, rescale, vmin.item(), vmax.item())
+                    new_arf[i_batch // frame_rate] = sr.astype(numpy.uint16).byteswap()
                     new_arf.flush()
                     break
                 break
@@ -166,9 +174,18 @@ def main():
 
 def experiment_dataset():
     metrics.pop("rmse_sw")
+    upscale_factor = 2
+    bias = 0
+    rescale = 255
+    transformed_dataset = ARFDataset(
+        "/home/maksim/data/DSIAC/cegr/arf/cegr01937_0005.arf",
+        # "/home/maksim/data/DSIAC/cegr/arf/cegr01939_0001.arf",
+        rescale=rescale,
+        bias=bias,
+    )
+
     n_resblocks = 32
     n_feats = 256
-    upscale_factor = 2
     with torch.cuda.device(0):
         with torch.no_grad():
             model = EDSR(
@@ -176,224 +193,24 @@ def experiment_dataset():
                 n_resblocks,
                 n_feats,
                 res_scale=0.1,
-                rgb_range=2 ** 16 - 1,
-                # rgb_mean=(0, 0, 0)
-            )
-            load_model_state(
-                model, "/home/maksim/data/checkpoints/dbpn_checkpoints/edsr_x2.pt"
-            )
-            model = model.to("cuda")
-            transformed_dataset = ARFDataset(
-                "/home/maksim/data/DSIAC/cegr/arf/cegr01937_0005.arf",
-                transform=transforms.Compose(
-                    [
-                        # Lambda(lambda x: torch_mad_normalize(x)),
-                        # Lambda(lambda x: torch.clamp(x, -20, 20)),
-                        # Lambda(lambda x: linear_scale(x, vmin=0, vmax=2 ** 16 - 1)),
-                        Lambda(lambda x: torch.stack([x, x, x])),
-                        # transforms.Normalize(
-                        #     mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-                        # ),
-                    ]
-                ),
-            )
-            hr = transformed_dataset.arf.get_frame_mat(0)
-            frame = transformed_dataset[0].to("cuda").unsqueeze(0)
-            bicubic = interpolate(
-                frame,
-                scale_factor=(1 / upscale_factor, 1 / upscale_factor),
-                mode="bicubic",
-                align_corners=True,
-            )
-            sr = model(bicubic)
-            sr = sr.squeeze(0).mean(dim=0).cpu().numpy()
-            for metric_name, metric in metrics.items():
-                print(f"full range meanshift {metric_name} {metric(hr, sr)}")
-            show_im(sr, title=f"full range meanshift", height=0.95)
-
-            model = EDSR(
-                upscale_factor,
-                n_resblocks,
-                n_feats,
-                res_scale=0.1,
-                rgb_range=255,
                 rgb_mean=(0, 0, 0),
+                rgb_std=(1, 1, 1),
             )
             load_model_state(
                 model, "/home/maksim/data/checkpoints/dbpn_checkpoints/edsr_x2.pt"
             )
             model = model.to("cuda")
-            transformed_dataset = ARFDataset(
-                "/home/maksim/data/DSIAC/cegr/arf/cegr01937_0005.arf",
-                transform=transforms.Compose(
-                    [
-                        # Lambda(lambda x: torch_mad_normalize(x)),
-                        # Lambda(lambda x: torch.clamp(x, -20, 20)),
-                        Lambda(
-                            lambda x: linear_scale(
-                                x, vmin=0, vmax=2 ** 16 - 1, rescale=255
-                            )
-                        ),
-                        Lambda(lambda x: torch.stack([x, x, x])),
-                        # transforms.Normalize(
-                        #     mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-                        # ),
-                    ]
-                ),
-            )
-            frame = transformed_dataset[0].to("cuda").unsqueeze(0)
-            bicubic = interpolate(
-                frame,
-                scale_factor=(1 / upscale_factor, 1 / upscale_factor),
-                mode="bicubic",
-                align_corners=True,
-            )
-            sr = model(bicubic)
-            sr = sr.squeeze(0).mean(dim=0).cpu().numpy()
-            sr = sr / 255 + 2 ** 16 - 1
-            for metric_name, metric in metrics.items():
-                print(f"255 no meanshift {metric_name} {metric(hr, sr)}")
-            show_im(sr, title=f"255 range no meanshift", height=0.95)
 
-            model = EDSR(
-                upscale_factor,
-                n_resblocks,
-                n_feats,
-                res_scale=0.1,
-                rgb_range=255,
-                # rgb_mean=(0, 0, 0)
-            )
-            load_model_state(
-                model, "/home/maksim/data/checkpoints/dbpn_checkpoints/edsr_x2.pt"
-            )
-            model = model.to("cuda")
-            transformed_dataset = ARFDataset(
-                "/home/maksim/data/DSIAC/cegr/arf/cegr01937_0005.arf",
-                transform=transforms.Compose(
-                    [
-                        # Lambda(lambda x: torch_mad_normalize(x)),
-                        # Lambda(lambda x: torch.clamp(x, -20, 20)),
-                        Lambda(
-                            lambda x: linear_scale(
-                                x, vmin=0, vmax=2 ** 16 - 1, rescale=255
-                            )
-                        ),
-                        Lambda(lambda x: torch.stack([x, x, x])),
-                        # transforms.Normalize(
-                        #     mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-                        # ),
-                    ]
-                ),
-            )
-            frame = transformed_dataset[0].to("cuda").unsqueeze(0)
-            bicubic = interpolate(
-                frame,
-                scale_factor=(1 / upscale_factor, 1 / upscale_factor),
-                mode="bicubic",
-                align_corners=True,
-            )
-            sr = model(bicubic)
-            sr = sr.squeeze(0).mean(dim=0).cpu().numpy()
-            sr = sr / 255 + 2 ** 16 - 1
-            for metric_name, metric in metrics.items():
-                print(f"255 meanshift {metric_name} {metric(hr, sr)}")
-            show_im(sr, title=f"255 range meanshift", height=0.95)
+            frame, vmin, vmax = transformed_dataset[0]
+            frame = frame.unsqueeze(0)
 
-            im = transformed_dataset.arf.get_frame_mat(0)
-            im = linear_scale(im, vmin=0, vmax=2 ** 16 - 1, rescale=255)
-            m = im.mean()
-            s = im.std()
-            model = EDSR(
-                upscale_factor,
-                n_resblocks,
-                n_feats,
-                res_scale=0.1,
-                rgb_range=255,
-                rgb_mean=(m, m, m),
-                rgb_std=(s, s, s),
-            )
-            load_model_state(
-                model, "/home/maksim/data/checkpoints/dbpn_checkpoints/edsr_x2.pt"
-            )
-            model = model.to("cuda")
-            transformed_dataset = ARFDataset(
-                "/home/maksim/data/DSIAC/cegr/arf/cegr01937_0005.arf",
-                transform=transforms.Compose(
-                    [
-                        # Lambda(lambda x: torch_mad_normalize(x)),
-                        # Lambda(lambda x: torch.clamp(x, -20, 20)),
-                        Lambda(
-                            lambda x: linear_scale(
-                                x, vmin=0, vmax=2 ** 16 - 1, rescale=255
-                            )
-                        ),
-                        Lambda(lambda x: torch.stack([x, x, x])),
-                        # transforms.Normalize(
-                        #     mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-                        # ),
-                    ]
-                ),
-            )
-            frame = transformed_dataset[0].to("cuda").unsqueeze(0)
-            bicubic = interpolate(
-                frame,
-                scale_factor=(1 / upscale_factor, 1 / upscale_factor),
-                mode="bicubic",
-                align_corners=True,
-            )
-            sr = model(bicubic)
-            sr = sr.squeeze(0).mean(dim=0).cpu().numpy()
-            sr = sr / 255 + 2 ** 16 - 1
-            for metric_name, metric in metrics.items():
-                print(f"255 std mean shift {metric_name} {metric(hr, sr)}")
-            show_im(sr, title=f"255 std mean", height=0.95)
-
-            model = EDSR(
-                upscale_factor,
-                n_resblocks,
-                n_feats,
-                res_scale=0.1,
-                rgb_range=255,
-                rgb_mean=(0, 0, 0),
-            )
-            load_model_state(
-                model, "/home/maksim/data/checkpoints/dbpn_checkpoints/edsr_x2.pt"
-            )
-            model = model.to("cuda")
-            transformed_dataset = ARFDataset(
-                "/home/maksim/data/DSIAC/cegr/arf/cegr01937_0005.arf",
-                transform=transforms.Compose(
-                    [
-                        Lambda(lambda x: torch_mad_normalize(x)),
-                        Lambda(lambda x: torch.clamp(x, -20, 20)),
-                        Lambda(lambda x: linear_scale(x, rescale=255)),
-                        Lambda(lambda x: torch.stack([x, x, x])),
-                        # transforms.Normalize(
-                        #     mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-                        # ),
-                    ]
-                ),
-            )
-            frame = transformed_dataset[0].to("cuda").unsqueeze(0)
-            bicubic = interpolate(
-                frame,
-                scale_factor=(1 / upscale_factor, 1 / upscale_factor),
-                mode="bicubic",
-                align_corners=True,
-            )
-            med = numpy.median(hr)
-            x_mad = mad(hr.flatten())
-            hr_mad = numpy.clip((hr - med) / x_mad, -20, 20)
-            vmin, vmax = hr_mad.min(), hr_mad.max()
-            sr = model(bicubic)
-            sr = sr.squeeze(0).mean(dim=0).cpu().numpy()
-            for metric_name, metric in metrics.items():
-                print(
-                    f"mad norm 255 range {metric_name} {metric(hr, ((sr / 255) * (vmax - vmin) + vmin) * x_mad + med)}"
-                )
-            show_im(sr, title=f"mad norm 255 range", height=0.95)
+            out = model(frame.to("cuda"))
+            sr = out.squeeze(0).mean(dim=0).cpu().numpy()
+            show_im(sr)
+            sr = linear_unscale(sr, bias, rescale, vmin, vmax)
+            # show_im(sr)
 
 
 if __name__ == "__main__":
-    # main()
-    test_grid()
+    main()
+    # experiment_dataset()
