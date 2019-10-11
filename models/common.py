@@ -58,10 +58,12 @@ class UpsampleBlock(nn.Module):
         kernel = icnr(self.conv.weight, upscale_factor=2)
         self.conv.weight.data.copy_(kernel)
         self.pixel_shuffle = nn.PixelShuffle(upscale_factor=2)
+        self.prelu = nn.PReLU()
 
     def forward(self, x):
         x = self.conv(x)
         x = self.pixel_shuffle(x)
+        x = self.prelu(x)
         return x
 
 

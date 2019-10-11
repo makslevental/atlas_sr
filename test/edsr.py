@@ -1,5 +1,6 @@
 import argparse
 import os
+import subprocess
 
 import numpy
 import pandas
@@ -177,4 +178,6 @@ def experiment_dataset():
 
 if __name__ == "__main__":
     main()
+    subprocess.run(["ls", "-l"])
     # experiment_dataset()
+
